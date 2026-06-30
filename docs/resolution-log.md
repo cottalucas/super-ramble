@@ -3,6 +3,40 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-06-30: Phase 2 deployed to super-ramble.web.app (Spark plan)
+
+Deployed phase 2 to https://super-ramble.web.app on the Spark no-cost plan,
+Hosting and Firestore rules only. Functions were not deployed; the Claude
+backend is phase 3 and needs Blaze then.
+
+- Merged `feat/phase-2-task-app` to main through PR #1 after CI passed (build,
+  offline evals, Function syntax check). Deployed commit: `efec8e1`.
+- Ran `firebase deploy --only hosting,firestore:rules`. Did not run a full
+  deploy, which would attempt Functions and fail on Spark.
+- Created `.firebaserc` pointing the default project at `super-ramble` instead
+  of running interactive `firebase init`, to avoid overwriting the
+  owner-scoped `firestore.rules`.
+- The production build needs the Firebase web config at build time. Pulled it
+  with `firebase apps:sdkconfig` into a gitignored `.env.local` and rebuilt, so
+  the deployed bundle runs the real Google auth gate and Firestore, not local
+  mode. The web config is public by design and is never committed; only
+  `.env.example` carries placeholder names.
+
+Verified: the site loads (200), the deployed bundle boots to the auth gate with
+a Continue with Google button, the console is clean, and no phase 2 code calls
+`/api`. The `/api/**` rewrite returns 404 while Functions are undeployed, which
+is harmless because no phase 2 view depends on it. The Firestore rules released
+are the owner-scoped rules in the repo.
+
+### Decisions not to relitigate
+
+- Spark plan covers Hosting and Firestore. Functions stay undeployed until
+  phase 3, which requires enabling Blaze first. Blaze has a free tier that
+  covers low usage at effectively no cost. Do not upgrade the plan before
+  phase 3 needs it.
+- The `/api/**` rewrite stays in `firebase.json` now and resolves once the
+  `api` Function is deployed in phase 3.
+
 ## 2026-06-30: Phase 2 docs population and task app shell
 
 Populated the `docs/` set with full content, then built the persisted task app
