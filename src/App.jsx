@@ -1,21 +1,65 @@
-import Placeholder from './ui/Placeholder.jsx';
-import { firebaseReady } from './lib/firebase.js';
+import { useState } from 'react';
+import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
+import { AppDataProvider, useData } from './AppData.jsx';
+import Sidebar from './components/Sidebar.jsx';
+import QuickAddModal from './components/QuickAddModal.jsx';
+import TodayView from './views/TodayView.jsx';
+import UpcomingView from './views/UpcomingView.jsx';
+import ProjectView from './views/ProjectView.jsx';
 
-// First pass: one calm, deployable page. The auth gate is a seam, not a wall.
-// VITE_ENABLE_LOCAL_PREVIEW shows the page without auth during development.
-// Real auth and the propose-confirm-write flow arrive next (see docs/roadmap.md).
-export default function App() {
-  const localPreview = import.meta.env.VITE_ENABLE_LOCAL_PREVIEW === 'true';
+// The signed-in shell: sidebar plus the active view. A signed-in user lands on
+// Today. See docs/roadmap.md.
+function Shell() {
+  const { ready, quickAdd, openAdd, closeAdd } = useData();
+  const [view, setView] = useState({ type: 'today' });
 
-  // When config is missing and we are not in local preview, say so plainly
-  // instead of rendering a broken page.
-  if (!firebaseReady && !localPreview) {
+  if (!ready) {
+    return <div className="auth"><p>Loading your tasks.</p></div>;
+  }
+
+  return (
+    <div className="app">
+      <Sidebar view={view} onNavigate={setView} onAddTask={() => openAdd({})} />
+      <main className="content">
+        {view.type === 'today' ? <TodayView /> : null}
+        {view.type === 'upcoming' ? <UpcomingView /> : null}
+        {view.type === 'project' ? <ProjectView view={view} /> : null}
+      </main>
+      {quickAdd.open ? <QuickAddModal defaults={quickAdd.defaults} onClose={closeAdd} /> : null}
+    </div>
+  );
+}
+
+function Gate() {
+  const { user, loading, signIn } = useAuth();
+
+  if (loading) {
+    return <div className="auth"><p>Loading.</p></div>;
+  }
+
+  if (!user) {
     return (
-      <Placeholder
-        note="Firebase config is missing. Copy .env.example to .env.local and fill it in."
-      />
+      <div className="auth">
+        <h1>Super Ramble</h1>
+        <p>Brain-dump in, structured projects out. Sign in to start.</p>
+        <button type="button" className="btn btn-primary" onClick={signIn}>
+          Continue with Google
+        </button>
+      </div>
     );
   }
 
-  return <Placeholder />;
+  return (
+    <AppDataProvider>
+      <Shell />
+    </AppDataProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <Gate />
+    </AuthProvider>
+  );
 }

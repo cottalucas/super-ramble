@@ -30,6 +30,7 @@ humans all start here. The root tool files (`CLAUDE.md`, `AGENTS.md`,
 - Builds clean. `npm run build` produces `dist/`.
 - Offline evals pass. `npm run eval` is green and writes `evals/runs/latest.json`.
 - Matches the design system, including the anti-pattern checklist.
+- Reads as native Todoist against `docs/reference/`.
 - The store interface shape is unchanged, unless the doc changed with it.
 - Docs and the resolution log are updated in the same pass.
 - Copy follows stop-slop. Active voice, no filler, varied rhythm, no em dashes,

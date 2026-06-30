@@ -1,31 +1,43 @@
 # Roadmap
 
-## Built (this skeleton)
+## Built
 
-- Repo structure and the full `docs/` source-of-truth set.
-- Firebase wired: Auth, Firestore, Hosting, Functions, config from env with a
-  missing-config guard.
-- Auth-gate seam and a single calm, deployable placeholder page.
-- The structuring pipeline boundary: contract, strict validator, prompt builder,
-  and an injected `callModel` so one path serves offline, local live, and prod.
-- Offline eval harness with six synthetic fixtures and negative contract cases.
-  No credits. Writes `evals/runs/latest.json`.
-- Local trace capture and `npm run trace:summary` with a budget block.
-- The `/api` Function stub: real auth, real per-user daily limits, real usage
-  logging; model and Todoist calls stubbed to contract-shaped fixtures.
-- CI: build, offline evals, and a Function syntax check.
+Phase 1: scaffold. The `docs/` set and conventions, the auth-gate seam, the store
+interface seam, the eval and trace flywheel, Firebase wiring, and CI.
+
+Phase 2: the persisted task app shell.
+- Sidebar nav: Add task, Search stub, Inbox, Today, Upcoming, and a Projects
+  list. Projects is the only project grouping.
+- Today view: tasks due today under a date header, with an overdue rollover
+  section. List layout.
+- Upcoming view: a horizontally scrollable multi-day window, one column per day
+  with its own Add task affordance and a Today control top-right. Seven-day
+  window.
+- Project view: title, optional collapsible sections, tasks, and sub-tasks
+  nested under their parent. List layout, with a clean seam for Board later.
+- Inbox: the default project, rendered like any project.
+- Quick-add modal: name, description, Date picker (Today, Tomorrow, This weekend,
+  Next week, No date, a month calendar, and a Time option), Priority picker (four
+  flags), Labels, Reminders, and a footer project/section selector with Cancel
+  and Add task.
+- Task row: circular checkbox that completes, content, and a meta line with due
+  time in green, label chips, and the project name when shown outside its
+  project. Priority sets the checkbox ring color.
+- Project overflow: Edit, Add section, Delete only.
+- `store.createProjectTree` batch write, used by the normal Add flows.
+- Native Todoist look against [docs/reference/](reference/).
 
 ## Next
 
-- The real structuring prompt and contract, tuned against live evals.
-- Todoist OAuth flow and the real project read and batched write.
-- The propose-confirm-write UI.
-- Design tokens derived from screenshots of the live Todoist Ramble flow.
-- Live evals once the contract is stable.
-- Voice capture (record then transcribe) as a thin input adapter.
+Phase 3: the Super Ramble pipeline. Classify, Structure, Write, evals first,
+writing into the task app through `createProjectTree`. Then live Todoist OAuth and
+REST v1 so it can write into a real Todoist account, not only the local store.
 
 ## Out of scope
 
-- Live-streaming voice. Ramble already owns that. Do not compete on it.
-- Auto-execution of tasks. The user always confirms before any write.
-- Any feature that decides or does the work rather than structuring it.
+- Competing on capture quality or live-audio streaming.
+- Auto-execution without confirmation.
+- Board and Calendar layouts beyond leaving seams.
+- Search logic, Filters page, Labels management page, Reporting, Favorites,
+  Share, comments, templates, CSV, attachments, location, deadline, extensions.
+- Drag-and-drop reordering. Order fields exist; the manual reorder UI is out.
