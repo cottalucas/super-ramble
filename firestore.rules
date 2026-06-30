@@ -1,21 +1,39 @@
 rules_version = '2';
 
 // Every document is scoped to its owner. No cross-user reads or writes.
-// Personal free text is encrypted client-side before it ever reaches here,
-// so even an owner read returns ciphertext. See docs/architecture.md.
+// Usage records are written by the Function (Admin SDK bypasses rules); clients
+// may read their own but never write them. See docs/architecture.md.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // A user owns everything under their own uid.
-    match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
     }
 
-    // Usage records are written by the Function (Admin SDK bypasses rules).
-    // Clients may read their own usage but never write it.
-    match /users/{uid}/llmUsage/{day} {
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow write: if false;
+    match /users/{uid} {
+      // Profile and settings on the user document itself.
+      allow read, write: if isOwner(uid);
+
+      match /projects/{projectId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /sections/{sectionId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /tasks/{taskId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /labels/{labelId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /drafts/{draftId} {
+        allow read, write: if isOwner(uid);
+      }
+      // Usage is read-only to the client; only the Function writes it.
+      match /llmUsage/{day} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
     }
 
     // Deny everything else by default.

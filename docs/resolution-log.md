@@ -3,6 +3,57 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-06-30: Phase 2 docs population and task app shell
+
+Populated the `docs/` set with full content, then built the persisted task app
+shell to it.
+
+Docs now contain:
+- `brief.md`: the three stages, the unowned organize step, the product, the
+  user, scope, the success signal, and the constraints.
+- `architecture.md`: the full Firestore data model (projects, sections, tasks
+  with `parentId`, labels under `users/{uid}`), the store interface and its
+  `createProjectTree` batch method, the stubbed Todoist client contract, the
+  four-stage pipeline at a high level, and the revised folder map.
+- `design-system.md`: the `ds-` tokens verbatim, Inter, the native-Todoist
+  principle, the litmus test, the stop-slop copy rules, and the anti-pattern
+  checklist. Points at `docs/reference/` as the source of visual truth.
+- `llm-pipeline.md`: the detailed Transcribe, Classify, Structure, Write
+  contracts, the per-stage eval assertions, the guard suite, and the cost
+  posture.
+- `roadmap.md`: phase 2 items listed under Built.
+
+Built: the store interface (`src/store/`) with a Firestore adapter and a
+localStorage adapter behind one shape, sharing pure ref-resolution in
+`tree.js`. The auth gate, the sidebar nav, the Today view with overdue
+rollover, the horizontal Upcoming window, the Project view with collapsible
+sections and two-level nested sub-tasks, Inbox as the default project, the
+quick-add modal with the date, priority, label, and reminder pickers, and the
+task row with the priority ring and green due meta. Updated `firestore.rules`
+to scope every collection to its owner.
+
+Verified live: create project, task, sub-task, set priority and date, complete
+a task, and reload, all persist. `createProjectTree` resolves sections,
+two-level nesting, and routing into an existing project, and rejects orphan
+sub-tasks. Build clean, offline evals still 12/12.
+
+### Decisions not to relitigate
+
+- The task app is built before the pipeline because Structure emits a
+  `createProjectTree` tree. The store is the contract.
+- A sub-task is a task with `parentId` set. That single field is the structural
+  capability the product is built around.
+- One write path: the UI and the pipeline both create through
+  `createProjectTree`. Normal Add flows route through it too.
+- The app talks to the store interface, never to Firestore directly. Two
+  adapters sit behind it; local mode runs when config is missing or preview is
+  on, so the app boots without keys.
+- The folder map changed this pass (`src/store/`, `src/views/`,
+  `src/components/`, `src/auth/`, `src/firebase.js`); the doc changed with it.
+- `docs/reference/` holds the screenshots that are the source of visual truth.
+  They were not in the repo this pass, so the build followed the inline specs
+  and the tokens; refine against the real images when they land.
+
 ## 2026-06-30: Scaffolding pass
 
 Set up the deployable skeleton and the full `docs/` source-of-truth set. Built:

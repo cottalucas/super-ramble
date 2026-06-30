@@ -1,52 +1,57 @@
 # Brief
 
-## What super-ramble is
+## Stage
 
-Voice brain-dump in, structured projects out. super-ramble reads a transcript
-plus your existing Todoist projects, decides whether the content is loose tasks
-or a project with nested sub-tasks, proposes a scaffold, shows a one-line reason
-for that decision, and on your confirm writes the result to Todoist.
+Working prototype. Phase 1 scaffolded the repo and conventions. Phase 2 builds
+the persisted task app shell. Phase 3 adds the Super Ramble pipeline.
 
-## The stage
+## Problem
 
-This is the organize step that sits right after capture. Todoist's Ramble
-already captures a spoken stream into flat tasks and routes them into existing
-projects. super-ramble does the part Ramble does not: it synthesizes structure.
+Capturing tasks is solved. Todoist Ramble takes a spoken brain-dump and turns it
+into separate tasks, fast and well. But Ramble is flat by design. Its own
+interface states it does not create sub-tasks. A brain-dump is often not a list
+of loose tasks. It is a project waiting to be structured: a goal, a set of
+steps, some of them nested. Today the user builds that structure by hand after
+capture. The organize step between a raw dump and a structured project is
+unowned.
 
-## The problem
+## Product
 
-Ramble captures and routes. It does not structure or nest. Its own UI tips state
-that it does not support sub-tasks, and it does not invent a new project shape
-from a dump. So a messy spoken plan lands as a flat pile of tasks. The user is
-left to build the project, order the steps, and nest the sub-tasks by hand. That
-manual reorganization is the gap super-ramble fills.
+Super Ramble is the organize step. A user rambles or types a brain-dump. Super
+Ramble reads it against the user's existing projects and labels, decides whether
+the content is loose tasks or a structured project, and when it is a project,
+proposes a scaffold: a project name, sections where they help, tasks, and
+sub-tasks nested under their parents, with priorities and dates inferred from the
+words. The user reviews the proposed structure, edits anything, and confirms.
+Only on confirm does Super Ramble write the project tree to the task store.
+Nothing is auto-executed. The model proposes, the human commits.
 
-## The user
+## User
 
-Anyone who brain-dumps into Todoist and then has to organize. They think out
-loud, capture fast, and want the structure to fall out without busywork. They
-already trust Todoist, so super-ramble has to feel calm and adjacent to it, not
-like a louder, busier tool.
+Anyone who thinks out loud before they organize. People who brain-dump into a
+task app and then spend effort turning that dump into something structured. They
+already know what they want to do. They lack a fast path from spoken intent to
+organized structure.
 
 ## Scope
 
-- Capture: record then transcribe. Deliberately simple. A thin input adapter.
-- Structure synthesis: loose tasks or project-with-sub-tasks, with reasoning.
-- Confirm: the user reviews and accepts before anything is written.
-- Write: create the project and nested tasks in Todoist on confirm.
+A faithful task app as the container: projects, sections, tasks, sub-tasks,
+priorities, dates, labels, reminders. On top of it, a capture-to-structure
+pipeline that writes into the container on confirm. The four pipeline stages are
+detailed in [docs/llm-pipeline.md](llm-pipeline.md).
 
 ## Success signal
 
-A user speaks a messy dump and gets back a correctly scaffolded project they
-accept and ship to Todoist with one confirm. The structure matches what they
-meant. They did not have to fix it.
+A user rambles a real project, gets back a scaffold they recognize as theirs,
+confirms it with light edits, and keeps using it. They reach for Super Ramble the
+next time they have a messy project in their head, instead of building it by
+hand.
 
 ## Constraints
 
-- Privacy. Personal free text is encrypted client-side before any write. No
-  secret key reaches the browser.
-- User in control. Nothing is written without an explicit confirm.
-- Capture stays simple so structuring stays the focus. The voice pipeline is an
-  adapter, not the product.
-- Generic output kills trust. A bland or wrong scaffold is worse than none. The
-  decision and its one-line reason have to feel right the first time.
+- The structure has to be genuinely good. A bad scaffold is worse than none,
+  because the user has to unpick it.
+- Capture stays deliberately simple. The value is the structuring, not the
+  transcription.
+- Nothing writes without explicit confirmation.
+- Personal task text can be sensitive. It is treated as private by default.

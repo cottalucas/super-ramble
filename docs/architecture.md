@@ -2,115 +2,151 @@
 
 ## Priority
 
-Voice is a thin input adapter. Structuring is the core. The folder layout and
-the data flow keep that visible: capture feeds a transcript into the pipeline,
-and the pipeline does the work that matters.
+The data model is the contract that matters most. The Super Ramble pipeline
+writes structured projects into the task store, so the store is built first and
+the pipeline is built to fit it. A sub-task is a task with `parentId` set. That
+single field is the structural capability the whole product is built around.
 
 ## Folder map
 
 ```
 src/
-  main.jsx, App.jsx          app entry and the auth-gate seam
-  lib/firebase.js            Firebase init from env, guards missing config
-  lib/store.js               store interface seam (Firestore behind it)
+  main.jsx, App.jsx          app entry and the signed-in shell
+  firebase.js                Firebase init from env, guards missing config
   lib/crypto.js              AES-GCM client-side encrypt/decrypt seam
-  pipeline/                  the structuring core, not in the UI
-    structure.js             transcript + projects -> validated scaffold
-    contracts.js             the JSON contract and its strict validator
-    prompt.js                Haiku prompt builder
-  ui/Placeholder.jsx         the deployable placeholder page
-functions/
-  index.js                   the /api proxy
+  auth/                      the auth gate and current-user context
+  store/                     the store interface; Firestore behind it
+    index.js                 createStore: picks the adapter, exposes the interface
+    tree.js                  pure ref-resolution for createProjectTree
+    firestore-store.js       Firestore adapter (modular SDK, writeBatch)
+    local-store.js           localStorage adapter (dev without keys)
+  todoist/                   stubbed Todoist client contract (mock now)
+  pipeline/                  the structuring core (phase 3)
+    structure.js, contracts.js, prompt.js
+  components/                Sidebar, TaskRow, QuickAddModal, pickers, sections
+  views/                     Today, Upcoming, Project (renders Inbox too)
+functions/                   the /api proxy
 evals/                       fixtures, offline cases, gitignored runs
 scripts/                     eval and trace tooling
+docs/                        the source of truth, with reference/ screenshots
 llm-traces/                  local raw traces (gitignored)
 ```
 
 ## Data model
 
-Everything lives under the signed-in user.
+Mirrors Todoist's REST v1 model closely so the pipeline maps cleanly to it.
+Every document is scoped to the signed-in user under `users/{uid}`.
 
-- `users/{uid}` profile and settings.
-- `users/{uid}/drafts/{id}` a proposed scaffold awaiting confirm. Personal free
-  text fields (transcript, task contents, project name) are stored as AES-GCM
-  ciphertext, never plaintext.
-- `users/{uid}/llmUsage/{YYYY-MM-DD}` privacy-safe usage for the day: requests,
-  costUsd, inputTokens, outputTokens. Written by the Function only.
+`users/{uid}/projects/{projectId}`
+- `name`: string
+- `color`: string (design token name)
+- `view`: "list" | "board" (default "list")
+- `order`: number
+- `isInbox`: boolean (exactly one true per user)
+- `createdAt`, `updatedAt`
 
-Firestore rules scope every document to its owner. Clients can read their own
-usage but cannot write it.
+`users/{uid}/sections/{sectionId}`
+- `projectId`: string
+- `name`: string
+- `order`: number
+- `collapsed`: boolean
 
-## The store interface seam
+`users/{uid}/tasks/{taskId}`
+- `projectId`: string
+- `sectionId`: string | null
+- `parentId`: string | null  (the field that makes a task a sub-task; this is the whole point)
+- `content`: string
+- `description`: string
+- `priority`: 1 | 2 | 3 | 4  (1 = p1/red highest, 4 = none)
+- `due`: { date: string|null, datetime: string|null, string: string|null, isRecurring: boolean } | null
+- `labels`: string[]
+- `reminders`: [{ type: "absolute"|"relative", at: string }]
+- `completed`: boolean
+- `completedAt`: string | null
+- `order`: number
+- `createdAt`, `updatedAt`
 
-The app talks to `lib/store.js`, never to Firestore directly. The seam is the
-contract; Firestore sits behind it. Changing the store shape is a documented
-decision, not a casual edit (see docs/orchestration.md, definition of done).
-Any value carrying personal free text is encrypted through `lib/crypto.js`
-before it reaches the store.
+`users/{uid}/labels/{labelId}`
+- `name`: string
+- `color`: string
 
-## The pipeline boundary
+Nesting depth: at least two levels of sub-tasks. A project with sections and
+nested tasks is creatable in one batched write, because that is exactly what the
+pipeline calls. Firestore rules scope every collection above to its owner.
 
-The UI never calls the model directly. The structuring call is injected as a
-`callModel` function so one code path runs three ways:
+## The store interface (src/store/)
 
-- Offline evals: `callModel` returns a fixture's mocked response. No credits.
-- Local live: `callModel` hits the Vite dev bridge. The key stays server-side.
-- Production: `callModel` hits the `/api` Function.
+The app talks to this interface, never to Firestore directly. The app imports
+`createStore`, never the SDK. One adapter sits behind the interface: Firestore
+when configured and signed in, localStorage in local preview. Both adapters
+implement the same methods, so the app and the evals see one shape.
 
-`structure.js` validates every response against `contracts.js` before returning.
-A response that drifts out of the contract throws, so the UI never renders an
-unchecked shape.
+Methods:
+
+- Projects: `listProjects`, `getProject`, `createProject`, `updateProject`,
+  `deleteProject` (cascades its sections and tasks).
+- Sections: `listSections(projectId)`, `createSection`, `updateSection`,
+  `deleteSection`.
+- Tasks: `listTasks(filter)`, `createTask`, `updateTask`, `deleteTask`,
+  `completeTask` (sets `completed` and `completedAt`).
+- Labels: `listLabels`, `createLabel`, `updateLabel`, `deleteLabel`.
+- Bootstrap: `ensureInbox` (creates the single Inbox project on first run).
+- Batch: `createProjectTree({ project, sections, tasks })`.
+
+`createProjectTree` writes a whole tree in one batch and returns the created ids.
+`project` is `{ id }` to route into an existing project, or `{ name, color, ... }`
+to create a new one. `sections` and `tasks` carry local refs (`ref`) that
+`tasks` reference through `parentRef` and `sectionRef`. The store pre-generates
+ids, resolves every ref to an id, and commits in one batch. The pure
+ref-resolution lives in `src/store/tree.js` and is shared by both adapters.
+
+Both the UI and the later pipeline create through `createProjectTree`, so there
+is one write path and one set of evals. Normal Add flows route through it too:
+adding a task to an existing project calls `createProjectTree` with
+`project: { id }` and one task.
+
+## The Todoist client (src/todoist/)
+
+A stubbed contract for now. Live OAuth and REST v1 calls come later.
+
+- `readProjects()` read the user's Todoist projects (names and ids).
+- `readLabels()` read the user's Todoist labels.
+- `createTree(tree)` batched create that mirrors `createProjectTree`.
+
+Mock implementation in phase 2. The target is the Todoist REST API v1 at
+developer.todoist.com, the unified API that merged the old REST and Sync APIs,
+base URL `https://api.todoist.com/api/v1`. Do not build against the archived v6
+Sync API. The batched create maps a project with sections and nested tasks to one
+request: a new project, `item_add` per task, and `parent_id` for each sub-task.
+
+## The pipeline (high level)
+
+Four stages, detailed in [docs/llm-pipeline.md](llm-pipeline.md):
+
+1. Transcribe: audio or text in, transcript out.
+2. Classify: transcript plus existing projects and labels in, a flat-or-project
+   decision with a visible reason out. Runs on Claude Haiku.
+3. Structure: runs only for a project. Emits a tree shaped for
+   `createProjectTree`, validated against a JSON schema. Runs on Haiku.
+4. Write: runs only on explicit confirm. Translates the validated tree into a
+   `createProjectTree` call. A pure function, no model call.
+
+Structure emits a `createProjectTree` tree. That is why the task app is built
+first.
 
 ## The /api Function contract
 
 The browser holds no secret. It calls same-origin `/api/**`. The Function
 verifies the Firebase Auth token, reads secrets, enforces per-user daily limits,
-proxies the calls, and logs usage. Endpoints:
-
-- `POST /api/structure` verify auth, check daily limits, call Haiku with the
-  built prompt, validate, log usage, return the contract JSON.
-- `POST /api/todoist/oauth` exchange the OAuth code for a token using the Todoist
-  client secret. Scope `data:read_write`.
-- `GET /api/todoist/projects` read the user's projects (names and ids) for
-  routing.
-- `POST /api/todoist/write` write the confirmed project-with-nested-tasks.
-
-Per-user daily request and cost limits are enforced against
-`users/{uid}/llmUsage/{YYYY-MM-DD}`. Raw prompts and responses are stored only
-when `LLM_STORE_RAW_TRACES=true`, which is off in production.
-
-## Todoist OAuth and write flow
-
-Verified against the current Todoist API v1 (the unified API that merged the old
-REST and Sync APIs). Base URL `https://api.todoist.com/api/v1`. Do not build
-against the archived v6 Sync API or the deprecating `rest/v2` and `sync/v9`.
-
-1. Authorize. OAuth 2.0 with scope `data:read_write`. The client secret is a
-   Function secret; the token exchange happens server-side.
-2. Read projects. `POST https://api.todoist.com/api/v1/sync` with
-   `sync_token='*'` and `resource_types=["projects"]`. The response carries a
-   `projects` array of names and ids. These names go into the prompt for
-   routing.
-3. Propose and confirm. The pipeline returns a scaffold. The user reviews and
-   confirms in the UI. Nothing is written before this.
-4. Write, batched and atomic. `POST https://api.todoist.com/api/v1/sync` with a
-   commands array:
-   - `project_add` with a `temp_id` (only when creating a new project; when
-     routing into an existing project, skip this and use its real id).
-   - `item_add` per task. Its `project_id` is the new project's `temp_id` or the
-     existing project's real id.
-   - `item_add` per sub-task. Its `parent_id` is the parent task's `temp_id`,
-     which nests it. Sub-tasks are real tasks with a `parent_id`; that is how
-     Todoist represents nesting.
-   - The response returns `temp_id_mapping`, resolving each `temp_id` to the real
-     server id.
-
-Batching the whole scaffold in one commands array makes the confirm-to-write a
-single request that either lands together or not at all.
+proxies the model and Todoist calls, and logs privacy-safe usage to
+`users/{uid}/llmUsage/{YYYY-MM-DD}`. Endpoints: `POST /api/structure`,
+`POST /api/todoist/oauth`, `GET /api/todoist/projects`, `POST /api/todoist/write`.
+Raw prompts and responses are stored only when `LLM_STORE_RAW_TRACES=true`, off
+in production.
 
 ## Secrets
 
 Firebase web config lives in `.env.local` (gitignored); the `VITE_*` values are
-public by design and carry no secret. The Anthropic key and the Todoist client
-secret are Firebase Functions secrets, set with `firebase functions:secrets:set`.
-No key ever reaches the browser.
+public by design. The Anthropic key and the Todoist client secret are Firebase
+Functions secrets, set with `firebase functions:secrets:set`. No key ever reaches
+the browser.
