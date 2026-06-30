@@ -1,0 +1,26 @@
+{
+  "id": "04-ambiguous-clarify",
+  "describe": "Ambiguous dump held for clarification instead of guessing structure.",
+  "transcript": "I keep thinking about the thing we talked about. We should probably do something about it soon.",
+  "existingProjects": [
+    { "id": "2331", "name": "Work" },
+    { "id": "2332", "name": "Groceries" }
+  ],
+  "mockResponse": {
+    "decision": "tasks",
+    "reasoning": "Too vague to structure without guessing, so ask one question before proposing anything.",
+    "targetProjectId": null,
+    "project": null,
+    "tasks": [],
+    "needsClarification": true,
+    "clarificationQuestion": "What is the thing you want to act on, and what is the first concrete step?"
+  },
+  "expected": {
+    "decision": "tasks",
+    "hasProject": false,
+    "targetProjectId": null,
+    "needsClarification": true,
+    "minSubtasks": 0,
+    "contents": []
+  }
+}

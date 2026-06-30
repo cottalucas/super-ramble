@@ -1,0 +1,30 @@
+{
+  "id": "05-multilingual",
+  "describe": "Multilingual input (Portuguese) structured without translating the content.",
+  "transcript": "Preciso organizar a mudanca de apartamento. Tenho que contratar a transportadora, empacotar a cozinha e avisar o senhorio.",
+  "existingProjects": [
+    { "id": "2331", "name": "Work" },
+    { "id": "2332", "name": "Groceries" }
+  ],
+  "mockResponse": {
+    "decision": "project",
+    "reasoning": "Um unico objetivo com passos dependentes, entao um projeto com sub-tarefas faz sentido.",
+    "targetProjectId": null,
+    "project": { "name": "Mudanca de apartamento" },
+    "tasks": [
+      { "content": "Contratar a transportadora", "priority": 2, "due": null, "subtasks": [] },
+      { "content": "Empacotar a cozinha", "priority": 1, "due": null, "subtasks": [] },
+      { "content": "Avisar o senhorio", "priority": 1, "due": null, "subtasks": [] }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "project",
+    "hasProject": true,
+    "targetProjectId": null,
+    "needsClarification": false,
+    "minSubtasks": 0,
+    "contents": ["Contratar a transportadora", "Empacotar a cozinha", "Avisar o senhorio"]
+  }
+}
