@@ -3,6 +3,74 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-12: Migrated to a new repo with a single clean commit, not another history rewrite
+
+Follow-up to the same day's "Rewrote git history to remove the same leaked
+secrets from every past commit" entry below. That rewrite force-pushed a
+redacted history to every branch of `main`, but GitHub keeps a separate,
+hidden ref per pull request (`refs/pull/N/head`) that a force-push to `main`
+never touches. Several already-merged PRs in the #27-#46 range were
+confirmed still serving the real, unredacted values in plaintext via
+`https://github.com/cottalucas/super-ramble/pull/<N>.diff`, no login
+required: the real `TODOIST_CLIENT_SECRET` (confirmed against a live
+Todoist App Console screenshot), a Firebase client id, the owner's personal
+email, and a Firebase API key fragment. A history rewrite cannot reach a
+PR's own hidden ref, so no further rewrite of `main` would have closed
+this; only removing the PRs from public view does.
+
+Done as a full repo migration rather than a second rewrite pass, since a
+brand-new repo with a single commit has no old PR refs to leak from, by
+construction:
+
+1. Built a clean single-commit history in a scratch location (not the live
+   working directory), copying the working tree minus `.git`, confirmed
+   against the existing `.gitignore`. Verified with `git log --all -p`
+   grepped for the leaked values' *shapes* (an `AIzaSy`-prefixed key, a
+   32-char hex value near "secret", any literal email other than the
+   `redacted@example.com` placeholder) that the one commit was actually
+   clean, not assumed clean because it was new.
+2. Added `scripts/check-secrets.mjs`, a CI step run before build on every
+   push and PR, scanning tracked files for the same three shapes. Verified
+   it catches each shape (temporarily added one, confirmed the check
+   failed, removed it, confirmed clean) and does not false-positive on
+   content already in this file that resembles but is not a leak: a
+   40-character git commit SHA, and a GCP default-service-account address
+   (`...-compute@developer.gserviceaccount.com`), neither of which is
+   secret or personal.
+3. Renamed the old `cottalucas/super-ramble` to `super-ramble-archive` and
+   set it private, freeing the `super-ramble` name and closing public
+   access to the old PR diffs.
+4. Created a new `cottalucas/super-ramble`, private, from the clean
+   single-commit scratch history. Confirmed CI green on the new repo's own
+   Actions tab for the initial push, not assumed from a local run.
+5. Cut the live working directory over: replaced `.git` with the new
+   repo's, confirmed the remote, the one-commit log, and a clean
+   `npm run build` / `npm run eval` / secret guard from the real working
+   directory itself.
+6. Found and deleted the local `cp -r` safety backup from the earlier
+   history-rewrite pass (a sibling directory, dated the same day), since it
+   was the one remaining full local copy of the pre-rewrite, unredacted
+   history.
+
+### Decisions not to relitigate
+
+- A PR's `.diff` and `.patch` endpoints are served from the PR's own ref,
+  independent of what `main` points to. Any future history-sensitive fix on
+  a repo with merged PR history has to account for this, not just for
+  `super-ramble`.
+- The old repo was renamed and made private, not deleted. Deleting it is a
+  separate, explicitly confirmed step, not part of this pass.
+- The secret guard's patterns are intentionally narrow (key prefix, hex
+  adjacent to a secret-related keyword within a proximity window, email
+  outside the placeholder and GCP-service-account allowlist) rather than a
+  bare 32-hex or bare email match, because a bare match already
+  false-positives on ordinary content in this repo (commit SHAs, GCP
+  service-account addresses). Keep it scoped, not loosened to "any hex" or
+  "any email."
+- `TODOIST_CLIENT_SECRET` was already rotated and dead before this pass;
+  this migration addresses the client id, the UID, the email, and the API
+  key fragment, which cannot be rotated the same way.
+
 ## 2026-07-12: README restructured, positioning and reading order, not a content patch
 
 The prior same-day README rewrite (see the entry below) was accurate but
