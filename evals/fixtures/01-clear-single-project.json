@@ -1,0 +1,48 @@
+{
+  "id": "01-clear-single-project",
+  "describe": "Clear single project with nested sub-tasks.",
+  "transcript": "Okay so I want to throw a surprise birthday party for Maya next month. I need to book a venue, send out invites to the group, order a cake, and figure out the playlist. For the invites I should make a guest list first and then send the messages.",
+  "existingProjects": [
+    { "id": "2331", "name": "Work" },
+    { "id": "2332", "name": "Groceries" }
+  ],
+  "mockResponse": {
+    "decision": "project",
+    "reasoning": "One coherent effort with dependent steps, so a project with nested sub-tasks fits.",
+    "confidence": 0.92,
+    "targetProjectId": null,
+    "project": { "name": "Maya's Surprise Birthday Party" },
+    "tasks": [
+      { "content": "Book a venue", "priority": 2, "due": null, "subtasks": [] },
+      {
+        "content": "Send out invites",
+        "priority": 1,
+        "due": null,
+        "subtasks": [
+          { "content": "Make a guest list", "priority": 1, "due": null },
+          { "content": "Send the messages", "priority": 1, "due": null }
+        ]
+      },
+      { "content": "Order a cake", "priority": 1, "due": null, "subtasks": [] },
+      { "content": "Figure out the playlist", "priority": 1, "due": null, "subtasks": [] }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "project",
+    "hasProject": true,
+    "targetProjectId": null,
+    "needsClarification": false,
+    "confidenceAbove": 0.7,
+    "minSubtasks": 2,
+    "contents": [
+      "Book a venue",
+      "Send out invites",
+      "Make a guest list",
+      "Send the messages",
+      "Order a cake",
+      "Figure out the playlist"
+    ]
+  }
+}

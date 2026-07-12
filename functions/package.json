@@ -1,0 +1,14 @@
+{
+  "name": "super-ramble-functions",
+  "private": true,
+  "description": "super-ramble /api proxy: auth, secrets, model + Todoist, usage logging.",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "firebase-admin": "^12.3.0",
+    "firebase-functions": "^5.0.1"
+  }
+}

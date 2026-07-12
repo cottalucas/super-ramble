@@ -1,0 +1,46 @@
+{
+  "id": "07-sections-when-they-help",
+  "describe": "Project with distinct workstreams, grouped into sections via sectionRef.",
+  "transcript": "I'm planning our Q3 conference. For the venue side I need to book the hall and confirm catering. For speakers I need to confirm the keynote and finalize the agenda. For marketing I need to design the flyer and send the email blast.",
+  "existingProjects": [
+    { "id": "2331", "name": "Work" },
+    { "id": "2332", "name": "Groceries" }
+  ],
+  "mockResponse": {
+    "decision": "project",
+    "reasoning": "One coherent effort with three distinct workstreams, so sections separate them clearly.",
+    "confidence": 0.86,
+    "targetProjectId": null,
+    "project": { "name": "Q3 Conference" },
+    "sections": [
+      { "ref": "venue", "name": "Venue" },
+      { "ref": "speakers", "name": "Speakers" },
+      { "ref": "marketing", "name": "Marketing" }
+    ],
+    "tasks": [
+      { "content": "Book the hall", "priority": 2, "due": null, "sectionRef": "venue", "subtasks": [] },
+      { "content": "Confirm catering", "priority": 2, "due": null, "sectionRef": "venue", "subtasks": [] },
+      { "content": "Confirm the keynote", "priority": 1, "due": null, "sectionRef": "speakers", "subtasks": [] },
+      { "content": "Finalize the agenda", "priority": 1, "due": null, "sectionRef": "speakers", "subtasks": [] },
+      { "content": "Design the flyer", "priority": 3, "due": null, "sectionRef": "marketing", "subtasks": [] },
+      { "content": "Send the email blast", "priority": 3, "due": null, "sectionRef": "marketing", "subtasks": [] }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "project",
+    "hasProject": true,
+    "targetProjectId": null,
+    "needsClarification": false,
+    "minSubtasks": 0,
+    "contents": [
+      "Book the hall",
+      "Confirm catering",
+      "Confirm the keynote",
+      "Finalize the agenda",
+      "Design the flyer",
+      "Send the email blast"
+    ]
+  }
+}

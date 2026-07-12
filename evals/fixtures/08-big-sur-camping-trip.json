@@ -1,0 +1,146 @@
+{
+  "id": "08-big-sur-camping-trip",
+  "describe": "Real confirmed trace (2026-07-07): multi-workstream camping trip. Priorities hand-corrected for the two explicit urgency cues (campsite reservation: urgent -> 1; sleeping bags: not urgent -> 4); everything else is the model's real output.",
+  "transcript": "\"Planning our camping trip to Big Sur, we leave Friday the 17th and come back Sunday the 19th. I still need to book the campsite reservation, that's urgent since sites fill up fast, should do it today or tomorrow. For gear, I need to check the tent for holes and patch it if needed, test the lantern batteries, and dig out the sleeping bags from the garage, that one's not urgent. For food, I need to plan meals for three days, buy propane for the stove, and pack the cooler, when I pack the cooler I need to get ice, drinks, and the stuff for burgers. For the car, I should check the tire pressure and pack the first aid kit, that one's important. Also need to download offline maps before we lose signal, and let the dog sitter know the exact dates.\"",
+  "existingProjects": [],
+  "mockResponse": {
+    "decision": "project",
+    "reasoning": "The transcript describes one coherent effort (planning a camping trip) with multiple related workstreams (campsite booking, gear, food, car prep, and logistics). It doesn't match any existing project, so a new project is created with sections for the distinct workstreams mentioned.",
+    "confidence": 0.86,
+    "targetProjectId": null,
+    "project": {
+      "name": "Big Sur Camping Trip"
+    },
+    "sections": [
+      {
+        "ref": "gear",
+        "name": "Gear"
+      },
+      {
+        "ref": "food",
+        "name": "Food"
+      },
+      {
+        "ref": "car",
+        "name": "Car"
+      }
+    ],
+    "tasks": [
+      {
+        "content": "Book campsite reservation",
+        "priority": 1,
+        "due": "today",
+        "sectionRef": null
+      },
+      {
+        "content": "Check tent for holes and patch if needed",
+        "priority": 2,
+        "due": null,
+        "sectionRef": "gear"
+      },
+      {
+        "content": "Test lantern batteries",
+        "priority": 2,
+        "due": null,
+        "sectionRef": "gear"
+      },
+      {
+        "content": "Dig out sleeping bags from garage",
+        "priority": 4,
+        "due": null,
+        "sectionRef": "gear"
+      },
+      {
+        "content": "Plan meals for three days",
+        "priority": 2,
+        "due": null,
+        "sectionRef": "food"
+      },
+      {
+        "content": "Buy propane for stove",
+        "priority": 2,
+        "due": null,
+        "sectionRef": "food"
+      },
+      {
+        "content": "Pack the cooler",
+        "priority": 2,
+        "due": null,
+        "sectionRef": "food",
+        "subtasks": [
+          {
+            "content": "Get ice",
+            "priority": 2,
+            "due": null
+          },
+          {
+            "content": "Get drinks",
+            "priority": 2,
+            "due": null
+          },
+          {
+            "content": "Get stuff for burgers",
+            "priority": 2,
+            "due": null
+          }
+        ]
+      },
+      {
+        "content": "Check tire pressure",
+        "priority": 2,
+        "due": null,
+        "sectionRef": "car"
+      },
+      {
+        "content": "Pack first aid kit",
+        "priority": 3,
+        "due": null,
+        "sectionRef": "car"
+      },
+      {
+        "content": "Download offline maps",
+        "priority": 2,
+        "due": null,
+        "sectionRef": null
+      },
+      {
+        "content": "Let the dog sitter know the exact dates",
+        "priority": 2,
+        "due": null,
+        "sectionRef": null
+      }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "project",
+    "hasProject": true,
+    "targetProjectId": null,
+    "needsClarification": false,
+    "minSubtasks": 3,
+    "contents": [
+      "Book campsite reservation",
+      "Check tent for holes and patch if needed",
+      "Test lantern batteries",
+      "Dig out sleeping bags from garage",
+      "Plan meals for three days",
+      "Buy propane for stove",
+      "Pack the cooler",
+      "Get ice",
+      "Get drinks",
+      "Get stuff for burgers",
+      "Check tire pressure",
+      "Pack first aid kit",
+      "Download offline maps",
+      "Let the dog sitter know the exact dates"
+    ],
+    "priorities": {
+      "Book campsite reservation": 1,
+      "Dig out sleeping bags from garage": 4
+    },
+    "due": {
+      "Book campsite reservation": "today"
+    }
+  }
+}

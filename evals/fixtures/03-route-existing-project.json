@@ -1,0 +1,30 @@
+{
+  "id": "03-route-existing-project",
+  "describe": "Dump routes into an existing project by id instead of creating one.",
+  "transcript": "For work I need to finish the Q3 report and schedule the team retro before Friday.",
+  "existingProjects": [
+    { "id": "2331", "name": "Work" },
+    { "id": "2332", "name": "Groceries" }
+  ],
+  "mockResponse": {
+    "decision": "project",
+    "reasoning": "These items clearly belong to the existing Work project, so route there rather than create one.",
+    "confidence": 0.88,
+    "targetProjectId": "2331",
+    "project": null,
+    "tasks": [
+      { "content": "Finish the Q3 report", "priority": 3, "due": "Friday", "subtasks": [] },
+      { "content": "Schedule the team retro", "priority": 2, "due": "Friday", "subtasks": [] }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "project",
+    "hasProject": false,
+    "targetProjectId": "2331",
+    "needsClarification": false,
+    "minSubtasks": 0,
+    "contents": ["Finish the Q3 report", "Schedule the team retro"]
+  }
+}

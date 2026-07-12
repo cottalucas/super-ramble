@@ -1,0 +1,31 @@
+{
+  "id": "02-loose-tasks",
+  "describe": "Loose unrelated tasks, no project synthesized.",
+  "transcript": "Random stuff I need to remember: call the dentist, return the library books, and buy stamps.",
+  "existingProjects": [
+    { "id": "2331", "name": "Work" },
+    { "id": "2332", "name": "Groceries" }
+  ],
+  "mockResponse": {
+    "decision": "tasks",
+    "reasoning": "Three unrelated errands with no shared goal, so flat tasks fit better than a project.",
+    "confidence": 0.9,
+    "targetProjectId": null,
+    "project": null,
+    "tasks": [
+      { "content": "Call the dentist", "priority": 1, "due": null, "subtasks": [] },
+      { "content": "Return the library books", "priority": 1, "due": null, "subtasks": [] },
+      { "content": "Buy stamps", "priority": 1, "due": null, "subtasks": [] }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "tasks",
+    "hasProject": false,
+    "targetProjectId": null,
+    "needsClarification": false,
+    "minSubtasks": 0,
+    "contents": ["Call the dentist", "Return the library books", "Buy stamps"]
+  }
+}

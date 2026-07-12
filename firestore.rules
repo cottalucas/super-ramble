@@ -1,0 +1,67 @@
+rules_version = '2';
+
+// Every document is scoped to its owner. No cross-user reads or writes.
+// Usage records are written by the Function (Admin SDK bypasses rules); clients
+// may read their own but never write them. See docs/architecture.md.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      // Profile and settings on the user document itself.
+      allow read, write: if isOwner(uid);
+
+      match /projects/{projectId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /sections/{sectionId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /tasks/{taskId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /labels/{labelId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /comments/{commentId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /drafts/{draftId} {
+        allow read, write: if isOwner(uid);
+      }
+      // Usage is read-only to the client; only the Function writes it.
+      match /llmUsage/{day} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+      // Structuring traces (transcript, response, confirm/cancel outcome) are
+      // never read or written by the client SDK, not even the owner. Only the
+      // Function (Admin SDK) and the local review/promote scripts (also
+      // Admin SDK) touch this collection; Admin SDK bypasses rules regardless
+      // of what they say, so this line states intent, it is not their gate.
+      match /structureTraces/{traceId} {
+        allow read, write: if false;
+      }
+      // The Todoist OAuth token (access + refresh), never readable by the
+      // client, not even the owner: unlike encrypted personal task text,
+      // this Function has to read it in plaintext to call Todoist on the
+      // user's behalf, so client-side encryption isn't an option here. Same
+      // rule shape as structureTraces above, but a distinct case for a
+      // distinct reason. Only the Function (Admin SDK) ever touches this
+      // collection; Admin SDK bypasses rules regardless of what they say,
+      // so this line states intent, it is not their gate. See
+      // docs/architecture.md.
+      match /todoistAuth/{docId} {
+        allow read, write: if false;
+      }
+    }
+
+    // Deny everything else by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

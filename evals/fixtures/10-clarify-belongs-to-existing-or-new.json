@@ -1,0 +1,26 @@
+{
+  "id": "10-clarify-belongs-to-existing-or-new",
+  "describe": "Genuine routing ambiguity, the other axis from decision confidence: content that could extend an existing project or be its own new one. needsClarification true, asking which in plain words, not a guessed structure. Distinct from 04 (content itself too vague to act on) and 09 (which of two identically-named projects); this is 'does this belong to something that already exists.'",
+  "transcript": "Thinking about redoing the backyard patio. New pavers, a fire pit, and some outdoor furniture. Need to get a few quotes first.",
+  "existingProjects": [{ "id": "proj-home-renovation-7f2c9a1e4d", "name": "Home Renovation" }],
+  "mockResponse": {
+    "decision": "tasks",
+    "reasoning": "Redoing the backyard patio could be more work under the existing Home Renovation project, or it could be its own project. Genuinely unclear which, so checking instead of guessing.",
+    "confidence": 0.45,
+    "targetProjectId": null,
+    "project": null,
+    "tasks": [],
+    "needsClarification": true,
+    "clarificationQuestion": "Is the backyard patio redo part of Home Renovation, or its own project?"
+  },
+  "expected": {
+    "decision": "tasks",
+    "hasProject": false,
+    "targetProjectId": null,
+    "needsClarification": true,
+    "confidenceBelow": 0.6,
+    "minSubtasks": 0,
+    "contents": [],
+    "clarificationExcludes": ["proj-home-renovation-7f2c9a1e4d"]
+  }
+}

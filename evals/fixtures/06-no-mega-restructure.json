@@ -1,0 +1,31 @@
+{
+  "id": "06-no-mega-restructure",
+  "describe": "Guard: unrelated items must not be collapsed into one mega-project.",
+  "transcript": "Couple of unrelated things on my mind. Fix the leaky faucet. Also start learning Spanish. And renew my passport.",
+  "existingProjects": [
+    { "id": "2331", "name": "Work" },
+    { "id": "2332", "name": "Groceries" }
+  ],
+  "mockResponse": {
+    "decision": "tasks",
+    "reasoning": "Three unrelated intentions, so keep them as separate tasks rather than forcing one project.",
+    "confidence": 0.83,
+    "targetProjectId": null,
+    "project": null,
+    "tasks": [
+      { "content": "Fix the leaky faucet", "priority": 1, "due": null, "subtasks": [] },
+      { "content": "Start learning Spanish", "priority": 1, "due": null, "subtasks": [] },
+      { "content": "Renew my passport", "priority": 1, "due": null, "subtasks": [] }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "tasks",
+    "hasProject": false,
+    "targetProjectId": null,
+    "needsClarification": false,
+    "minSubtasks": 0,
+    "contents": ["Fix the leaky faucet", "Start learning Spanish", "Renew my passport"]
+  }
+}

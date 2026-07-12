@@ -1,0 +1,29 @@
+{
+  "id": "09-ambiguous-duplicate-project-name",
+  "describe": "Guard: routing ambiguity from two same-named existing projects must be asked in plain words, never by exposing either project's raw id. Reproduces a real live trace from 2026-07-08 that asked the user to choose between two ids directly.",
+  "transcript": "Add a task to the Website Relaunch project: update the homepage banner copy.",
+  "existingProjects": [
+    { "id": "proj-webrelaunch-a1b2c3d4e5", "name": "Website Relaunch" },
+    { "id": "proj-webrelaunch-f6g7h8i9j0", "name": "Website Relaunch" }
+  ],
+  "mockResponse": {
+    "decision": "tasks",
+    "reasoning": "Two existing projects share the name 'Website Relaunch', so routing is ambiguous; asking the user to disambiguate in their own words rather than guessing or exposing an internal id.",
+    "confidence": 0.4,
+    "targetProjectId": null,
+    "project": null,
+    "tasks": [],
+    "needsClarification": true,
+    "clarificationQuestion": "You have two projects named 'Website Relaunch'. Which one should this go into? A quick distinguishing detail, like what it's for or roughly when you created it, would help."
+  },
+  "expected": {
+    "decision": "tasks",
+    "hasProject": false,
+    "targetProjectId": null,
+    "needsClarification": true,
+    "confidenceBelow": 0.6,
+    "minSubtasks": 0,
+    "contents": [],
+    "clarificationExcludes": ["proj-webrelaunch-a1b2c3d4e5", "proj-webrelaunch-f6g7h8i9j0"]
+  }
+}

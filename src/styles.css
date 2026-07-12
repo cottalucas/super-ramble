@@ -1,0 +1,2310 @@
+/* Design tokens. The source of truth is docs/design-system.md. */
+:root {
+  --ds-red: #dc4c3e;
+  --ds-red-tint: #fef0ed;
+  --ds-p1: #d1453b;
+  --ds-p2: #eb8909;
+  --ds-p3: #246fe0;
+  --ds-p4: transparent;
+  --ds-sidebar-bg: #fcfaf8;
+  --ds-canvas: #ffffff;
+  --ds-ink: #202020;
+  --ds-ink-soft: #808080;
+  --ds-line: #ededed;
+  --ds-due-green: #058527;
+
+  --sidebar-w: 266px;
+  --content-max: 800px;
+  --radius: 6px;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Dark theme. Same 12 tokens, applied through data-theme on the root, never
+   a separate stylesheet. Red stays the brand constant; every other token is
+   brightened or inverted for contrast on a dark surface. Values verified
+   against docs/design-system.md's anti-pattern checklist (contrast bar) when
+   this block was added; see the resolution log. */
+[data-theme='dark'] {
+  --ds-red: #dc4c3e;
+  --ds-red-tint: #3a211f;
+  --ds-p1: #e5675c;
+  --ds-p2: #f0994a;
+  --ds-p3: #5b93e8;
+  --ds-p4: transparent;
+  --ds-sidebar-bg: #191919;
+  --ds-canvas: #202020;
+  --ds-ink: #e8e6e3;
+  --ds-ink-soft: #9a9a9a;
+  --ds-line: #2e2e2e;
+  --ds-due-green: #3ddc65;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ds-ink);
+  background: var(--ds-canvas);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  /* Buttons default to the browser's own text color (often literal black),
+     not the surface's ink token, so a button with no color rule of its own
+     (e.g. .popover-item) read as black-on-black in dark mode. */
+  color: inherit;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--ds-ink);
+  /* Every input and textarea blends into whatever surface it sits on
+     instead of keeping the browser's default white, the one gap a token
+     audit would otherwise miss since no class here sets a background at
+     all. Individual rules still override this where a control needs its
+     own surface. */
+  background: transparent;
+}
+
+/* ---------- App shell ---------- */
+.app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  background: var(--ds-sidebar-bg);
+  border-right: 1px solid var(--ds-line);
+  padding: 12px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--ds-canvas);
+  position: relative;
+}
+
+/* ---------- Collapsible sidebar ---------- */
+.sidebar-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  padding: 4px;
+  border-radius: var(--radius);
+  display: grid;
+  place-items: center;
+}
+
+.sidebar-toggle:hover {
+  background: color-mix(in srgb, var(--ds-ink) 8%, transparent);
+  color: var(--ds-ink);
+}
+
+.sidebar-reveal {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 50;
+  border: 1px solid var(--ds-line);
+  background: var(--ds-canvas);
+  color: var(--ds-ink-soft);
+  border-radius: var(--radius);
+  padding: 6px;
+  display: grid;
+  place-items: center;
+}
+
+.sidebar-reveal:hover {
+  color: var(--ds-ink);
+}
+
+.content-inner {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 36px 48px 120px;
+}
+
+/* ---------- Responsive (phone width) ----------
+   Below this breakpoint the sidebar can't sit as a fixed-width flex sibling
+   without squeezing the content column unusably; App.jsx's Shell renders it
+   as a closed-by-default overlay instead (mobile prop / .sidebar-mobile),
+   tracked by its own in-memory state, never the persisted sidebarHidden
+   preference. Board layout's own responsive behavior is out of scope; a
+   phone-width viewport always gets List (see docs/design-system.md). */
+@media (max-width: 640px) {
+  .content-inner {
+    /* 56px clears .sidebar-reveal (fixed, top/left 14px, ~32px box):
+       reported directly against a screenshot, the reveal button sat right
+       on top of the view heading at this width. */
+    padding: 56px 16px 100px;
+  }
+
+  /* .detail-body's two-column layout (flexible main content plus a fixed
+     220px rail) assumes a 720px-wide modal; at phone width .modal's own
+     max-width clamp leaves only ~340px total, so the fixed rail alone left
+     ~120px for the main column, narrow enough that task titles wrapped
+     character by character. Found live, not assumed from the CSS. Stack
+     instead: full-width main content, then the rail below it, its divider
+     moving from a left border to a top one to match. */
+  .detail-body {
+    flex-direction: column;
+  }
+
+  .detail-rail {
+    flex: 0 0 auto;
+    width: 100%;
+    border-left: 0;
+    border-top: 1px solid var(--ds-line);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 59;
+  }
+
+  .sidebar-mobile {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 60;
+    max-width: 85vw;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+  }
+
+  .overlay {
+    padding-top: 16px;
+    padding-bottom: 16px;
+    align-items: flex-start;
+  }
+
+  .modal {
+    max-height: calc(100vh - 32px);
+  }
+
+  .landing {
+    flex-direction: column;
+    gap: 32px;
+    padding: 32px 20px;
+    text-align: center;
+  }
+
+  .landing-value {
+    max-width: none;
+  }
+
+  /* .landing's own text-align: center above would otherwise center the
+     typed text inside these fields too; the form itself still needs to
+     read left to right normally. */
+  .landing-signin-card {
+    width: 100%;
+    max-width: 340px;
+    text-align: left;
+  }
+
+  .settings-body {
+    flex-direction: column;
+  }
+
+  /* A plain stacked list above the detail pane, not a horizontal tab strip:
+     simpler than horizontal-scroll tabs, and Account/Theme/Todoist all fit
+     one screen width easily as full-width rows. flex-direction stays
+     column here on purpose, same as the base rule below; this override
+     only drops the vertical divider for a horizontal one instead. */
+  .settings-nav {
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--ds-line);
+    padding: 8px;
+  }
+
+  /* The wider desktop padding (32px 40px) added for the larger settings
+     panel leaves too little room at phone width; drop back to the old,
+     tighter padding rather than let content crowd against the modal edge. */
+  .settings-detail {
+    padding: 16px 20px;
+  }
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 10px;
+  font-weight: 600;
+}
+
+.sidebar-head .avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--ds-red);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* The avatar/name trigger for the new avatar menu (name/task-count header,
+   a "Synced <time ago>" row): a plain-reset button, flex:1 so it still
+   fills the same space the old bare avatar+name span pair did. */
+/* The wrapper, not the button itself, is what fills the row and anchors
+   the Popover: the Popover is a sibling of the button here, never its
+   child (matching SectionOptionsMenu.jsx's own trigger+Popover shape).
+   React replays a portaled element's click through its React-tree
+   ancestry, not its DOM position, so a Popover portaled *inside* a
+   clickable button re-fires that button's own onClick on every click
+   inside the menu, immediately re-opening it after any item's own handler
+   closes it. Found live: clicking Settings/Log out below closed the menu
+   and reopened it in the same tick. See docs/resolution-log.md. */
+.sidebar-head-trigger-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-head-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-weight: 600;
+  color: var(--ds-ink);
+}
+
+.avatar-menu-header {
+  padding: 8px 10px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ds-ink);
+  white-space: nowrap;
+}
+
+/* Static, non-interactive metadata, not a real menu action: no hover
+   highlight, unlike .popover-item. Same reasoning docs/design-system.md's
+   "Modal overflow menu" section already states for this class of content. */
+.avatar-menu-synced {
+  padding: 4px 10px 8px;
+  font-size: 12px;
+  color: var(--ds-ink-soft);
+}
+
+/* Settings and Log out rows, added below the header/synced lines
+   (reopened 2026-07-10, reported against a real Todoist avatar-menu
+   screenshot). Matches .settings-nav-item's own quiet, full-width,
+   left-aligned button look rather than inventing a new one. */
+.avatar-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  color: var(--ds-ink);
+  font-size: 14px;
+}
+
+.avatar-menu-item:hover {
+  background: color-mix(in srgb, var(--ds-ink) 4%, transparent);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: var(--radius);
+  color: var(--ds-ink);
+  font-size: 14px;
+}
+
+.nav-item:hover {
+  background: color-mix(in srgb, var(--ds-ink) 4%, transparent);
+}
+
+.nav-divider {
+  border: 0;
+  border-top: 1px solid var(--ds-line);
+  width: 100%;
+  margin: 6px 0;
+}
+
+.nav-item.active {
+  background: var(--ds-red-tint);
+  color: var(--ds-red);
+  font-weight: 500;
+}
+
+.nav-item[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.nav-item .icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: var(--ds-ink-soft);
+}
+
+.nav-item.active .icon {
+  color: var(--ds-red);
+}
+
+.nav-item .count {
+  margin-left: auto;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+}
+
+.nav-add .icon {
+  color: var(--ds-red);
+}
+
+.nav-add {
+  color: var(--ds-red);
+  font-weight: 500;
+}
+
+.nav-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.nav-search input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  outline: none;
+}
+
+.nav-section-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 8px 4px;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Real Todoist order: label, then "+", then the collapse caret rightmost.
+   margin-left: auto on the first of the two trailing buttons ("+") pushes
+   both it and the caret that follows it to the row's right edge as a
+   group; the caret itself needs no margin of its own, gap already spaces
+   them apart. Compared directly against a screenshot; see
+   docs/resolution-log.md, 2026-07-10. */
+.nav-section-add {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.nav-section-label .nav-section-caret {
+  padding: 2px;
+}
+
+.project-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 10px;
+}
+
+/* Sidebar project rows only: a colored "#" glyph in place of a filled dot,
+   matching Todoist's own sidebar convention. .project-dot (above) stays a
+   filled circle everywhere else this app shows a project's color (the Add
+   Project color picker, a task's meta line, a project view's own title),
+   contexts Todoist itself still renders as a dot, not a hash. */
+.project-hash {
+  flex: 0 0 16px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.nav-row-actions {
+  margin-left: auto;
+  opacity: 0;
+}
+
+.nav-item:hover .nav-row-actions {
+  opacity: 1;
+}
+
+.project-caret {
+  padding: 2px;
+  margin-left: -4px;
+}
+
+.project-caret-spacer {
+  width: 18px;
+  flex: 0 0 18px;
+}
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  padding: 8px;
+}
+
+.color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+}
+
+.color-swatch.selected {
+  border-color: var(--ds-ink);
+}
+
+/* ---------- Settings ----------
+   Two-pane: a category list on the left, the selected category's own
+   content on the right. Each category's own JSX section is unchanged from
+   the old single stacked-list layout; .settings-body just splits the
+   available width between .settings-nav and .settings-detail instead of
+   .modal-body holding every section stacked at once. See
+   docs/resolution-log.md, 2026-07-10. */
+.modal.settings-modal {
+  width: 880px;
+  max-width: calc(100vw - 64px);
+  max-height: calc(90vh - 32px);
+}
+
+.settings-body {
+  display: flex;
+  padding: 0;
+  min-height: 420px;
+}
+
+.settings-nav {
+  flex: 0 0 200px;
+  border-right: 1px solid var(--ds-line);
+  padding: 24px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  color: var(--ds-ink);
+  font-size: 14px;
+}
+
+.settings-nav-item:hover {
+  background: color-mix(in srgb, var(--ds-ink) 4%, transparent);
+}
+
+.settings-nav-item.active {
+  background: var(--ds-red-tint);
+  color: var(--ds-red);
+  font-weight: 500;
+}
+
+.settings-detail {
+  flex: 1;
+  min-width: 0;
+  padding: 32px 40px;
+  overflow-y: auto;
+}
+
+.settings-title {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.settings-section {
+  padding: 24px 0;
+  border-top: 1px solid var(--ds-line);
+}
+
+.settings-section:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.settings-heading {
+  margin: 0 0 18px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ds-ink);
+}
+
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  font-size: 14px;
+}
+
+.settings-label {
+  color: var(--ds-ink-soft);
+}
+
+.settings-note {
+  margin: 0;
+  color: var(--ds-ink-soft);
+  font-size: 13px;
+}
+
+.settings-signout {
+  margin-top: 10px;
+}
+
+.settings-theme-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-error {
+  color: var(--ds-red);
+  margin-top: 8px;
+}
+
+.icon-btn {
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.icon-btn:hover {
+  background: color-mix(in srgb, var(--ds-ink) 6%, transparent);
+}
+
+/* ---------- View header ---------- */
+.view-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.view-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.view-header .spacer {
+  flex: 1;
+}
+
+.date-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 0 4px;
+  border-bottom: 1px solid var(--ds-line);
+  margin-bottom: 6px;
+}
+
+.date-header .soft {
+  color: var(--ds-ink-soft);
+  font-weight: 400;
+}
+
+.section-overdue .date-header {
+  color: var(--ds-ink);
+}
+
+/* ---------- Task row ---------- */
+.task-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.task-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--ds-line);
+}
+
+.task-row.sub {
+  padding-left: 30px;
+}
+
+.task-row.sub2 {
+  padding-left: 56px;
+}
+
+/* Card density: Today and Upcoming. A bordered box per task instead of a
+   full-width divider row. Every behavior stays identical; only this wrapper
+   styling changes. See docs/roadmap.md (Phase 2.6). */
+.task-row.card {
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--ds-canvas);
+}
+
+.task-row[draggable='true'] {
+  cursor: grab;
+}
+
+.task-row[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.task-row.drag-over {
+  border-top: 2px solid var(--ds-red);
+}
+
+.task-row.card.drag-over {
+  border-top: 1px solid var(--ds-line);
+  box-shadow: 0 -2px 0 0 var(--ds-red);
+}
+
+/* The task-list end-zone's own drop indicator only (TaskList.jsx's
+   task-list-end-zone, a drop past the last row): a fixed zone below every
+   real row, so a placeholder appearing/disappearing here never shifts any
+   row's position. Do not reuse this for a mid-list "before"/"nest"
+   indicator; .drop-before/.drop-nest below exist specifically because an
+   inserted placeholder there caused real drops to silently no-op, see
+   docs/resolution-log.md, 2026-07-10. */
+.drop-placeholder {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ds-red);
+  margin: 4px 4px;
+}
+
+/* Position-aware drag preview on an existing row (ProjectView's List
+   layout, Sidebar's project tree): a box-shadow/background state on the
+   hovered row itself, never a mounted or unmounted sibling element.
+   box-shadow does not affect layout, so nothing shifts as dragPreview
+   changes while the pointer moves across several rows, unlike the
+   inserted-placeholder approach tried first. See TaskRow.jsx's and
+   Sidebar.jsx's own comments and docs/resolution-log.md, 2026-07-10. */
+.task-row.drop-before,
+.nav-item.drop-before {
+  box-shadow: inset 0 2px 0 0 var(--ds-red);
+}
+
+.task-row.drop-nest,
+.nav-item.drop-nest {
+  box-shadow: inset 0 0 0 2px var(--ds-red);
+  background: color-mix(in srgb, var(--ds-red) 6%, transparent);
+}
+
+.task-list-end-zone {
+  min-height: 10px;
+}
+
+.checkbox {
+  margin-top: 1px;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ds-ink-soft);
+  background: transparent;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  position: relative;
+}
+
+.checkbox .check {
+  opacity: 0;
+  width: 10px;
+  height: 10px;
+  color: var(--ds-ink-soft);
+}
+
+.checkbox:hover .check {
+  opacity: 0.5;
+}
+
+.checkbox.p1 {
+  border-color: var(--ds-p1);
+  background: color-mix(in srgb, var(--ds-p1) 10%, transparent);
+}
+.checkbox.p1 .check {
+  color: var(--ds-p1);
+}
+.checkbox.p2 {
+  border-color: var(--ds-p2);
+  background: color-mix(in srgb, var(--ds-p2) 10%, transparent);
+}
+.checkbox.p2 .check {
+  color: var(--ds-p2);
+}
+.checkbox.p3 {
+  border-color: var(--ds-p3);
+  background: color-mix(in srgb, var(--ds-p3) 10%, transparent);
+}
+.checkbox.p3 .check {
+  color: var(--ds-p3);
+}
+
+.task-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-content {
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+
+.task-row.done .task-content {
+  color: var(--ds-ink-soft);
+  text-decoration: line-through;
+}
+
+.task-desc {
+  color: var(--ds-ink-soft);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ds-ink-soft);
+}
+
+.meta-due {
+  color: var(--ds-due-green);
+}
+
+.meta-due.overdue {
+  color: var(--ds-p1);
+}
+
+.label-chip {
+  color: var(--ds-ink-soft);
+}
+
+.meta-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.task-row-actions {
+  opacity: 0;
+  display: flex;
+  gap: 2px;
+}
+
+.task-row:hover .task-row-actions {
+  opacity: 1;
+}
+
+/* ---------- Inline add affordance ---------- */
+.add-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 4px;
+  color: var(--ds-ink-soft);
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.add-line:hover {
+  color: var(--ds-red);
+}
+
+.add-line .plus {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--ds-red);
+  font-weight: 700;
+}
+
+.add-line:hover .plus {
+  background: var(--ds-red);
+  color: #fff;
+}
+
+/* ---------- Sections ---------- */
+.section {
+  margin-top: 18px;
+}
+
+.section-head-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--ds-line);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  flex: 1;
+  text-align: left;
+  font-weight: 700;
+  padding: 6px 0;
+}
+
+.section-menu {
+  opacity: 0;
+}
+
+.section-head-row:hover .section-menu,
+.board-col-head:hover .section-menu {
+  opacity: 1;
+}
+
+.section-head .caret {
+  transition: transform 0.12s ease;
+  color: var(--ds-ink-soft);
+}
+
+.section-head.collapsed .caret {
+  transform: rotate(-90deg);
+}
+
+.section-head .count {
+  color: var(--ds-ink-soft);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+/* A section's own optional description, set from the Edit/Add section form
+   (SectionForm.jsx). Read-only here; editing happens through that form, not
+   by typing directly in place, unlike ProjectDescription's live-autosave
+   textarea. See docs/architecture.md and docs/resolution-log.md. */
+.section-description {
+  color: var(--ds-ink-soft);
+  font-size: 13px;
+  margin: 6px 0 4px;
+}
+
+/* ---------- Empty state ---------- */
+.empty {
+  text-align: center;
+  color: var(--ds-ink-soft);
+  padding: 60px 20px;
+}
+
+.empty h3 {
+  color: var(--ds-ink);
+  margin: 14px 0 6px;
+  font-size: 15px;
+}
+
+/* ---------- Upcoming: vertical agenda ---------- */
+/* Row two: the month/year label (List only) on the left, the "‹ Today ›"
+   nav on the right. Board has no month label, so this row holds only the
+   nav for it, unchanged from before; a single flex child with
+   space-between still lands at the start, matching Board's prior layout. */
+.week-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.upcoming-month-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.upcoming-month-label .caret {
+  color: var(--ds-ink-soft);
+}
+
+.week-strip-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.week-strip-nav .icon-btn {
+  font-size: 16px;
+  padding: 4px 8px;
+}
+
+/* Row three: one pill per day, List only. */
+.week-strip-days {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 22px;
+}
+
+.week-strip-day {
+  flex: 1;
+  text-align: center;
+  padding: 8px 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ds-ink-soft);
+}
+
+.week-strip-day.current {
+  background: var(--ds-red);
+  color: #fff;
+}
+
+.agenda-section {
+  margin-bottom: 24px;
+  border-radius: 8px;
+}
+
+.agenda-section.drag-over-section {
+  outline: 2px dashed var(--ds-red);
+  outline-offset: 4px;
+}
+
+/* ---------- Upcoming: Board layout, phase 2's restored horizontal window ---------- */
+.upcoming-board-scroll {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  padding-bottom: 20px;
+}
+
+.day-col {
+  flex: 0 0 300px;
+  width: 300px;
+  padding: 0 16px;
+}
+
+.day-col:first-child {
+  padding-left: 0;
+}
+
+.day-col-head {
+  font-weight: 700;
+  padding: 6px 0 8px;
+  position: sticky;
+  top: 0;
+  background: var(--ds-canvas);
+}
+
+.day-col-head .soft {
+  color: var(--ds-ink-soft);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+.day-col.drag-over-section {
+  outline: 2px dashed var(--ds-red);
+  outline-offset: -2px;
+}
+
+/* ---------- Board layout: Inbox, Project, Today ---------- */
+.board {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  padding-bottom: 20px;
+  align-items: flex-start;
+}
+
+/* A plain background, no column divider. See docs/resolution-log.md,
+   2026-07-08: the 2026-07-05 divider was a reasoned guess made with no real
+   reference screenshot to check it against (docs/reference/ is still a
+   placeholder); reported directly against a live screenshot as reading
+   cluttered, removed. `.day-col` (Upcoming's Board) matches. */
+.board-col {
+  flex: 0 0 280px;
+  width: 280px;
+  padding: 0 16px;
+}
+
+.board-col:first-child {
+  padding-left: 0;
+}
+
+.board-col.drag-over-col {
+  outline: 2px dashed var(--ds-red);
+  outline-offset: -2px;
+}
+
+.board-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 6px 0 10px;
+}
+
+.board-col-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.board-col-head .count {
+  color: var(--ds-ink-soft);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+/* A section column's own optional description, the Board equivalent of
+   .section-description in List layout. */
+.board-col-desc {
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  margin: -4px 0 10px;
+}
+
+.board-col-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The trailing "+ Add section" stub column at the end of the row, matching
+   the reference's own board: an empty-column-shaped invitation rather than
+   a full-width line below the board. Widens into the same SectionForm box
+   every other add/edit entry point in this view uses once clicked. See
+   docs/resolution-log.md. */
+.board-col-add {
+  flex: 0 0 240px;
+  width: 240px;
+}
+
+.board-col-add .section-form {
+  margin-top: 0;
+}
+
+.board-col .task-row.card {
+  margin-bottom: 8px;
+}
+
+/* ---------- Layout control: List/Board tabs, Group by, Sort by ---------- */
+.layout-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--ds-ink) 5%, transparent);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+}
+
+.layout-tabs button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.layout-tabs button.active {
+  background: var(--ds-canvas);
+  color: var(--ds-ink);
+}
+
+/* Bold, small, sentence-case, matching the reference's weight; a hairline
+   above each one gives Group by and Sort by the same clear separation the
+   List/Board tabs already have below them. */
+.popover-section-label {
+  padding: 12px 10px 6px;
+  margin-top: 4px;
+  border-top: 1px solid var(--ds-line);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ds-ink-soft);
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.btn-primary {
+  background: var(--ds-red);
+  color: #fff;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: var(--ds-line);
+  color: var(--ds-ink);
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--ds-ink-soft);
+  border: 1px solid var(--ds-line);
+}
+
+/* Fits "Board", the longer of the two Layout labels, so toggling List/Board
+   never changes the trigger's own footprint and the header does not "move". */
+.layout-trigger {
+  min-width: 92px;
+  justify-content: center;
+}
+
+/* A token-based focus ring everywhere in the app, replacing the browser's
+   default blue outline on every native interactive control. :focus-visible
+   only, so a mouse click never shows it, only keyboard navigation does. Text
+   fields are excluded here: browsers treat any focus on an editable control
+   as :focus-visible, mouse click included, so this same rule on input/
+   textarea drew a bright ring around every field on ordinary click, worse in
+   dark mode where --ds-ink is near-white. Fields get their own, quieter
+   treatment below instead. */
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--ds-ink);
+  outline-offset: 2px;
+}
+
+/* Text fields show focus as a border-color change, not a ring: a bare input
+   or textarea (a title, a description) has no border to begin with, so a
+   ring reads as a stray box; a bordered one (.form-input) would double up
+   with its own border. */
+input:focus,
+textarea:focus {
+  outline: none;
+}
+
+.form-input:focus {
+  border-color: var(--ds-ink-soft);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--radius);
+  padding: 4px 9px;
+  background: var(--ds-canvas);
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+}
+
+.chip.active {
+  color: var(--ds-ink);
+  border-color: #d0d0d0;
+}
+
+/* ProjectPicker's trigger only, not .chip itself: .chip is shared by every
+   other picker trigger (Date, Priority, Labels) plus Settings' Theme
+   toggle, and none of those want a long value clipped with an ellipsis.
+   Checked every .chip usage before scoping this here rather than changing
+   .chip globally. */
+.project-picker-trigger {
+  max-width: 200px;
+}
+
+.project-picker-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Modal ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 50;
+}
+
+/* max-height plus flex column + .modal-body's own overflow-y is the generic
+   safety net: a short phone screen (an iPhone SE, 375x667) is the case that
+   surfaces it, but this holds at any height. Popover.jsx's own portal
+   escapes .modal's DOM entirely, so switching from overflow: visible to
+   hidden here never clips a picker. .modal-detail and .sr-preview-body
+   already manage their own internal scroll (.detail-body, .sr-preview-body);
+   this is additive for the modals that used plain .modal-body unguarded
+   (QuickAddModal, AddProjectModal, SettingsModal, ConfirmDialog,
+   SuperRambleModal's non-preview states). See docs/design-system.md's
+   "Responsive" section. */
+.modal {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(88vh - 16px);
+  background: var(--ds-canvas);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-body {
+  padding: 16px 16px 8px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.modal-name {
+  width: 100%;
+  border: 0;
+  outline: none;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.modal-desc {
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: none;
+  margin-top: 6px;
+  color: var(--ds-ink);
+}
+
+.modal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0 10px;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--ds-line);
+}
+
+.modal-footer .right {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/* Inline add-task: replaces a "+ Add task" line in place. Thin border, no
+   backdrop, no floating card, unlike the centered .overlay/.modal above. See
+   docs/design-system.md. */
+.inline-add {
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  background: var(--ds-canvas);
+  margin: 4px 0 10px;
+}
+
+
+/* ---------- Labeled form fields (Add Project) ---------- */
+.form-field {
+  margin-bottom: 14px;
+}
+
+.form-field:last-child {
+  margin-bottom: 0;
+}
+
+.form-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ds-ink-soft);
+  margin-bottom: 6px;
+}
+
+.form-input {
+  width: 100%;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.form-select-wrap {
+  display: block;
+}
+
+.select-control {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--ds-ink);
+  font-size: 14px;
+  text-align: left;
+}
+
+.select-control .caret {
+  margin-left: auto;
+  color: var(--ds-ink-soft);
+  flex-shrink: 0;
+}
+
+/* ---------- Super Ramble ---------- */
+.modal.modal-super-ramble {
+  width: 640px;
+}
+
+.sr-body {
+  padding: 18px 18px 8px;
+}
+
+.sr-preview-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.sr-textarea {
+  width: 100%;
+  min-height: 160px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--ds-ink);
+  background: transparent;
+  resize: vertical;
+}
+
+.sr-tips {
+  margin: 12px 0 6px;
+  padding-left: 18px;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Voice capture: a flat mic control, --ds-red for the active-recording
+   state, matching the same token every other primary/active surface in
+   this app already uses. No canvas, no waveform library. The idle control
+   (.voice-recorder) sits inline next to the textarea; once recording
+   actually starts, SuperRambleModal.jsx swaps to VoiceRecorder's "full"
+   variant (.voice-full and friends) below, a dedicated view instead of a
+   corner widget, the same one-CSS-scaled-circle level indicator, just
+   bigger and centered. See docs/design-system.md's "Recording indicator"
+   section and docs/resolution-log.md, 2026-07-08. */
+.voice-recorder {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.voice-mic.recording {
+  color: var(--ds-red);
+  background: color-mix(in srgb, var(--ds-red) 10%, transparent);
+}
+
+.voice-mic:disabled {
+  opacity: 0.5;
+}
+
+.voice-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ds-ink-soft);
+}
+
+/* The dedicated recording view. min-height keeps the modal from visibly
+   jumping size against the textarea view it temporarily replaces. */
+.voice-full {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 280px;
+  text-align: center;
+}
+
+.voice-full-stage {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.voice-full-ring {
+  position: absolute;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ds-red) 14%, transparent);
+  transition: transform 80ms linear;
+}
+
+.voice-full-ring-pulse {
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+
+.voice-full-stop {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ds-red);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.voice-full-stop:hover {
+  background: color-mix(in srgb, var(--ds-red) 88%, black);
+}
+
+.voice-full-timer {
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-ink);
+}
+
+.voice-full-timer-warn {
+  color: var(--ds-red);
+}
+
+.voice-full-hint,
+.voice-full-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ds-ink-soft);
+}
+
+.sr-loading,
+.sr-error,
+.sr-empty {
+  color: var(--ds-ink-soft);
+  padding: 20px 0;
+}
+
+.sr-loading-tip {
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  margin-top: 8px;
+  animation: sr-tip-fade 3400ms ease-in-out;
+}
+
+@keyframes sr-tip-fade {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.sr-reasoning {
+  color: var(--ds-ink);
+  margin: 0 0 4px;
+}
+
+.sr-confidence {
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  margin: 0 0 14px;
+}
+
+.sr-clarify {
+  color: var(--ds-ink);
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+.sr-project-name {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+/* The Todoist push toggle, new-project preview only. Sits left of the
+   footer's own Cancel/Confirm .right group (.modal-footer is already a flex
+   row; .right's margin-left: auto pushes those buttons to the far edge). */
+.sr-todoist-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ds-ink);
+}
+
+/* ---------- Confirm dialog ---------- */
+.modal.confirm-modal {
+  width: 400px;
+}
+
+.confirm-body {
+  padding: 20px 20px 8px;
+}
+
+.confirm-body h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.confirm-body p {
+  margin: 0;
+  color: var(--ds-ink-soft);
+  font-size: 13px;
+}
+
+/* ---------- Task detail ---------- */
+.modal.modal-detail {
+  width: 720px;
+  position: relative;
+}
+
+.detail-header-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.detail-close {
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  padding: 6px;
+  border-radius: 6px;
+}
+
+.detail-close:hover {
+  background: color-mix(in srgb, var(--ds-ink) 6%, transparent);
+}
+
+.detail-body {
+  display: flex;
+  align-items: flex-start;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.detail-main {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 20px 16px;
+}
+
+.detail-rail {
+  flex: 0 0 220px;
+  padding: 20px 20px 16px;
+  border-left: 1px solid var(--ds-line);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.detail-head .checkbox {
+  margin-top: 3px;
+}
+
+.detail-content {
+  flex: 1;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 2px 0;
+}
+
+.detail-desc {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.detail-add-sub {
+  margin-top: 10px;
+}
+
+.detail-add-sub input {
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ds-ink);
+}
+
+/* "Comments N," collapsible as a whole. Only rendered when there is at
+   least one comment, same as before this pass; the box below
+   (.comment-add) always renders regardless, since a task with zero
+   comments still needs a way to add the first one. Same inline-style
+   rotate-on-collapse convention ProjectNode's own project caret and the
+   sidebar's "My Projects" caret already use, not the separate CSS
+   .collapsed-class convention ProjectView's section heads use. */
+.comment-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 4px 0;
+  margin-top: 16px;
+  color: var(--ds-ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.comment-header:hover {
+  color: var(--ds-ink);
+}
+
+.comment-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.comment-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.comment-avatar {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--ds-red);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.comment-body {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.comment-meta {
+  margin-top: 2px;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+}
+
+/* A proper bordered box, matching .inline-add's own thin-border/canvas-
+   background pattern (docs/design-system.md's "Inline add-task" section),
+   instead of the old bare, borderless input. Cancel/Comment only appear
+   once there is text (see TaskDetail.jsx), never left visible-but-inert;
+   both share the same addComment() guard against a duplicate post from a
+   held Enter key. */
+.comment-add {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.comment-add-box {
+  flex: 1;
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  background: var(--ds-canvas);
+  padding: 8px 10px;
+}
+
+.comment-add-box textarea {
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--ds-ink);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.comment-add-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detail-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ds-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.detail-rail-divider {
+  border: 0;
+  border-top: 1px solid var(--ds-line);
+  width: 100%;
+  margin: 0;
+}
+
+.detail-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detail-meta-line {
+  font-size: 12px;
+  color: var(--ds-ink-soft);
+}
+
+.project-desc {
+  margin: 2px 0 16px;
+  font-size: 13px;
+  color: var(--ds-ink-soft);
+}
+
+/* ---------- Popover ---------- */
+.popover-wrap {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Position (fixed, top/left or top/right) is set inline by Popover.jsx,
+   computed from its anchor's real position, since the popover portals to
+   document.body precisely so no ancestor's overflow can clip it. */
+.popover {
+  z-index: 60;
+  background: var(--ds-canvas);
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  min-width: 240px;
+  padding: 6px;
+}
+
+.popover-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.popover-item:hover {
+  background: color-mix(in srgb, var(--ds-ink) 5%, transparent);
+}
+
+.popover-item-danger {
+  color: var(--ds-red);
+}
+
+.popover-item-row {
+  position: relative;
+}
+
+.popover-item-row .label-delete {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  background: var(--ds-canvas);
+}
+
+.popover-item-row:hover .label-delete {
+  opacity: 1;
+}
+
+.popover-item .when {
+  margin-left: auto;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+}
+
+.flag-p1 {
+  color: var(--ds-p1);
+}
+.flag-p2 {
+  color: var(--ds-p2);
+}
+.flag-p3 {
+  color: var(--ds-p3);
+}
+.flag-p4 {
+  color: var(--ds-ink-soft);
+}
+
+/* ---------- Calendar ---------- */
+.cal {
+  padding: 8px 6px;
+  border-top: 1px solid var(--ds-line);
+  margin-top: 4px;
+}
+
+.cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 8px;
+  font-weight: 600;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.cal-dow {
+  text-align: center;
+  color: var(--ds-ink-soft);
+  font-size: 11px;
+  padding-bottom: 4px;
+}
+
+.cal-day {
+  border: 0;
+  background: transparent;
+  border-radius: 50%;
+  aspect-ratio: 1;
+  font-size: 12px;
+  color: var(--ds-ink);
+}
+
+.cal-day:hover {
+  background: color-mix(in srgb, var(--ds-ink) 6%, transparent);
+}
+
+.cal-day.today {
+  color: var(--ds-red);
+  font-weight: 700;
+}
+
+.cal-day.muted {
+  color: var(--ds-line);
+}
+
+.cal-day.selected {
+  background: var(--ds-red);
+  color: #fff;
+}
+
+/* ---------- Auth gate: loading state only. The signed-out state itself is
+   .landing below; .auth now covers just the brief "Loading." text both
+   Gate and Shell show before the real user/task state is known. ---------- */
+.auth {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  text-align: center;
+  padding: 24px;
+}
+
+.auth p {
+  color: var(--ds-ink-soft);
+  margin: 0;
+  max-width: 30rem;
+}
+
+/* ---------- Landing / signed-out gate ----------
+   A value-prop side and a sign-in side, in the shape of a real product
+   login screen, split view: sign-in side left, value-prop side right. Copy
+   is pulled from docs/brief.md's Problem/Product sections, not Todoist's
+   own words. See docs/design-system.md's "Landing / signed-out gate"
+   section. A warmer page background than the flat --ds-canvas the
+   signed-in app uses, the same --ds-sidebar-bg token the sidebar already
+   establishes as this app's own "warm near-white" surface, not a new
+   color invented for this one page; the sign-in card sits on it in
+   --ds-canvas, giving real depth instead of one flat surface throughout. */
+/* Reopened 2026-07-10: forces light-theme token values for this subtree
+   only, regardless of [data-theme] on the root (set by index.html's own
+   pre-paint script from the stored preference). A real login screen is a
+   fixed, brand-controlled surface with no dark variant, independent of
+   whatever theme the product applies once signed in; [data-theme='dark']
+   on the root itself is untouched, so the signed-in Shell still respects
+   the real stored preference exactly as before. Re-declaring the same
+   light values when the root is already light is a harmless no-op. */
+.landing {
+  --ds-red: #dc4c3e;
+  --ds-red-tint: #fef0ed;
+  --ds-p1: #d1453b;
+  --ds-p2: #eb8909;
+  --ds-p3: #246fe0;
+  --ds-p4: transparent;
+  --ds-sidebar-bg: #fcfaf8;
+  --ds-canvas: #ffffff;
+  --ds-ink: #202020;
+  --ds-ink-soft: #808080;
+  --ds-line: #ededed;
+  --ds-due-green: #058527;
+
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 80px;
+  padding: 64px;
+  background: var(--ds-sidebar-bg);
+}
+
+.landing-value {
+  max-width: 420px;
+}
+
+.landing-lede {
+  color: var(--ds-ink-soft);
+  margin: 0 0 18px;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* A small looping accent built from this app's own icons and tokens, not
+   an imported image or a new animation library: three of its own glyphs
+   (capture, structure, done) pulse in a staggered loop, restrained motion
+   in the spirit of a real product screen's illustration without a real
+   screenshot to show yet. Replaces the old dashed placeholder box
+   entirely; see docs/resolution-log.md for why that box is gone. */
+.landing-accent {
+  margin-top: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 40px 24px;
+  border: 1px solid var(--ds-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ds-ink) 3%, var(--ds-canvas));
+}
+
+.landing-accent-icon {
+  display: inline-flex;
+  color: var(--ds-red);
+  animation: landing-accent-pulse 2.4s ease-in-out infinite;
+}
+
+.landing-accent-1 {
+  animation-delay: 0s;
+}
+
+.landing-accent-2 {
+  animation-delay: 0.8s;
+}
+
+.landing-accent-3 {
+  animation-delay: 1.6s;
+}
+
+.landing-accent-arrow {
+  color: var(--ds-line);
+  font-size: 18px;
+}
+
+@keyframes landing-accent-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+
+.landing-signin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+.landing-wordmark {
+  font-size: 18px;
+  font-weight: 700;
+  /* Explicit, not just inherited: body's own `color: var(--ds-ink)`
+     resolves against whatever theme is active at body's level (an
+     ancestor of .landing, not scoped by its light-theme override below),
+     and inheritance carries that already-resolved value down, it does not
+     re-evaluate the custom property inside .landing's own scope. Every
+     other piece of text under .landing already sets its own color
+     explicitly for the same reason; this one was missed and rendered
+     near-invisible in dark mode until caught live. */
+  color: var(--ds-ink);
+}
+
+.landing-signin-card {
+  border: 1px solid var(--ds-line);
+  border-radius: 12px;
+  background: var(--ds-canvas);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.1);
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  width: 340px;
+}
+
+.landing-signin-lede {
+  margin: 0;
+  color: var(--ds-ink-soft);
+  font-size: 14px;
+  text-align: center;
+}
+
+.landing-google-btn {
+  justify-content: center;
+}
+
+.landing-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+}
+
+.landing-divider::before,
+.landing-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--ds-line);
+}
+
+.landing-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.landing-form .btn-primary {
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.landing-forgot {
+  align-self: flex-end;
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.landing-form-error {
+  margin: 0;
+  color: var(--ds-red);
+  font-size: 13px;
+}
+
+.landing-form-note {
+  margin: 0;
+  color: var(--ds-due-green);
+  font-size: 13px;
+}
+
+.landing-toggle-mode {
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  font-size: 13px;
+  padding: 0;
+}
+
+/* Quiet, plain-text credit, never a button. The auth gate is a deliberate,
+   stated exception to "one primary action per surface" (docs/design-
+   system.md): Continue with Google and the email/password form are both
+   equally valid primary paths to the same goal, signing in, the same way
+   a real product's own login screen offers more than one provider button
+   without any of them competing for attention against each other; the
+   footer credit and secondary links (forgot password, toggle mode) stay
+   deliberately quiet so neither of those two real actions gets buried. */
+.landing-footer {
+  margin: 0;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+}
+
+.landing-footer a {
+  color: var(--ds-ink-soft);
+}
+
+.label-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Inverted from the current theme, on purpose: a dark toast reads on the
+     light canvas, a light toast reads on the dark one. In light mode this
+     is exactly #202020 on white, the same as before; only dark mode changes. */
+  background: var(--ds-ink);
+  color: var(--ds-canvas);
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  z-index: 80;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
