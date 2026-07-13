@@ -10,7 +10,13 @@
 //   - 01-clear-single-project.json:  one clean project with nested sub-tasks
 //   - 08-big-sur-camping-trip.json:  a real multi-section trip, the
 //     priority-corrected version (docs/resolution-log.md, 2026-07-08), not
-//     the raw buggy trace
+//     the raw buggy trace. "Pack first aid kit" here is priority 1, not the
+//     fixture's own uncorrected 3: docs/pipeline-learnings.md, 2026-07-13,
+//     found real "important" language landing softer than "urgent" twice,
+//     and a worked example still showing 3 would have kept contradicting
+//     the tightened prompt rule fixing exactly that. The fixture itself
+//     (evals/fixtures/08-big-sur-camping-trip.json) is untouched; only this
+//     copy of that response, used to teach the live model, changed.
 //   - 06-no-mega-restructure.json:   a restraint example, unrelated items
 //     that must NOT become a project
 //   - 07-sections-when-they-help.json: a project where sections earn their
@@ -86,7 +92,7 @@ export const REFERENCE_EXAMPLES = [
           ]
         },
         { content: 'Check tire pressure', priority: 2, due: null, sectionRef: 'car' },
-        { content: 'Pack first aid kit', priority: 3, due: null, sectionRef: 'car' },
+        { content: 'Pack first aid kit', priority: 1, due: null, sectionRef: 'car' },
         { content: 'Download offline maps', priority: 2, due: null, sectionRef: null },
         { content: 'Let the dog sitter know the exact dates', priority: 2, due: null, sectionRef: null }
       ],

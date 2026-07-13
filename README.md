@@ -174,6 +174,9 @@ structure. Nothing ever writes without the user's own explicit confirm.
 - [docs/llm-pipeline.md](docs/llm-pipeline.md), the pipeline contract in
   full: the exact Structure request/response shape, eval assertions per
   stage, cost posture, and the live-trace review cadence.
+- [docs/pipeline-learnings.md](docs/pipeline-learnings.md), short, dated
+  entries logging real findings from real traces (what was wrong, what
+  changed), distinct from the resolution log's everything-log.
 - [docs/roadmap.md](docs/roadmap.md), what's built, phase by phase, what's
   next, and what's deliberately out of scope.
 - [docs/resolution-log.md](docs/resolution-log.md), the append-only, dated

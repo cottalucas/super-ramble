@@ -1,0 +1,63 @@
+{
+  "id": "11-important-language-priority",
+  "describe": "Real confirmed trace (2026-07-13, uid ZGjRHCpURTeWKD2fll6lKKHezD43, trace ynQakgn1DZnrS7ADSVn6): 'important' language must carry the same weight as 'urgent'. The real response marked 'Buy renters insurance' priority 2 despite the transcript calling it 'important', the same softer-than-urgent miscalibration already noted (not corrected) on the Big Sur trace's 'Pack first aid kit' (docs/resolution-log.md, 2026-07-08). Hand-corrected here to priority 1; every other field, including the transcript's own real wording, is carried through unchanged from the real trace. See docs/pipeline-learnings.md, 2026-07-13.",
+  "transcript": "Okay so we're moving to the new apartment in three weeks and I need to get organized. For packing, I need to call around to a few grocery stores to see who has extra boxes lying around, that's not urgent, I've got time. Once I have boxes I need to actually pack up the kitchen first since it's the most stuff, then the bedroom, then the office last since I'm still working from it. For the utilities side, I need to call the electric company to transfer service to the new place, that one's urgent because if I don't call this week they can't guarantee it's on by move-in day. I also need to set up internet at the new place and update my address with the bank, that one's not urgent, whenever works. For moving day itself, I need to book the moving truck, that's urgent too, good trucks get booked up fast this time of year, so I should do it by this Friday. I also need to ask my brother if he can help carry the couch since it's heavy, and buy some extra tape and bubble wrap for the fragile stuff. Also need to buy renters insurance for the new place before we move in, that one's important. And for the old place, once we're out I need to do a final deep clean before the walkthrough, and drop off the keys with the landlord.",
+  "existingProjects": [],
+  "mockResponse": {
+    "decision": "project",
+    "reasoning": "This describes one coherent move to a new apartment happening in three weeks, with clear workstreams for packing, utilities, moving day logistics, and wrapping up the old place. It doesn't match any existing project, so I'm creating a new one with sections for those distinct areas.",
+    "confidence": 0.9,
+    "targetProjectId": null,
+    "project": {
+      "name": "Moving to New Apartment"
+    },
+    "sections": [
+      { "ref": "packing", "name": "Packing" },
+      { "ref": "utilities", "name": "Utilities" },
+      { "ref": "movingday", "name": "Moving Day" },
+      { "ref": "oldplace", "name": "Old Place" }
+    ],
+    "tasks": [
+      { "content": "Call around to grocery stores for extra boxes", "priority": 4, "due": null, "sectionRef": "packing", "subtasks": [] },
+      { "content": "Pack up the kitchen", "priority": 4, "due": null, "sectionRef": "packing", "subtasks": [] },
+      { "content": "Pack up the bedroom", "priority": 4, "due": null, "sectionRef": "packing", "subtasks": [] },
+      { "content": "Pack up the office", "priority": 4, "due": null, "sectionRef": "packing", "subtasks": [] },
+      { "content": "Call electric company to transfer service", "priority": 1, "due": "this week", "sectionRef": "utilities", "subtasks": [] },
+      { "content": "Set up internet at the new place", "priority": 4, "due": null, "sectionRef": "utilities", "subtasks": [] },
+      { "content": "Update address with the bank", "priority": 4, "due": null, "sectionRef": "utilities", "subtasks": [] },
+      { "content": "Book the moving truck", "priority": 1, "due": "Friday", "sectionRef": "movingday", "subtasks": [] },
+      { "content": "Ask brother to help carry the couch", "priority": 4, "due": null, "sectionRef": "movingday", "subtasks": [] },
+      { "content": "Buy extra tape and bubble wrap for fragile stuff", "priority": 4, "due": null, "sectionRef": "movingday", "subtasks": [] },
+      { "content": "Buy renters insurance for the new place", "priority": 1, "due": null, "sectionRef": "movingday", "subtasks": [] },
+      { "content": "Do a final deep clean before the walkthrough", "priority": 4, "due": null, "sectionRef": "oldplace", "subtasks": [] },
+      { "content": "Drop off keys with the landlord", "priority": 4, "due": null, "sectionRef": "oldplace", "subtasks": [] }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "project",
+    "hasProject": true,
+    "targetProjectId": null,
+    "needsClarification": false,
+    "minSubtasks": 0,
+    "contents": [
+      "Call around to grocery stores for extra boxes",
+      "Pack up the kitchen",
+      "Pack up the bedroom",
+      "Pack up the office",
+      "Call electric company to transfer service",
+      "Set up internet at the new place",
+      "Update address with the bank",
+      "Book the moving truck",
+      "Ask brother to help carry the couch",
+      "Buy extra tape and bubble wrap for fragile stuff",
+      "Buy renters insurance for the new place",
+      "Do a final deep clean before the walkthrough",
+      "Drop off keys with the landlord"
+    ],
+    "priorities": {
+      "Buy renters insurance for the new place": 1
+    }
+  }
+}

@@ -7,6 +7,10 @@
 // both copies of this array (and the resulting SYSTEM_PROMPT strings) and
 // fails CI if they drift. Edit src/pipeline/referenceExamples.js first, then
 // copy the exact same change here; do not edit only one copy.
+//
+// "Pack first aid kit" below is priority 1, not the raw trace's own 3: see
+// src/pipeline/referenceExamples.js's header comment and
+// docs/pipeline-learnings.md, 2026-07-13.
 
 const REFERENCE_EXAMPLES = [
   {
@@ -70,7 +74,7 @@ const REFERENCE_EXAMPLES = [
           ]
         },
         { content: 'Check tire pressure', priority: 2, due: null, sectionRef: 'car' },
-        { content: 'Pack first aid kit', priority: 3, due: null, sectionRef: 'car' },
+        { content: 'Pack first aid kit', priority: 1, due: null, sectionRef: 'car' },
         { content: 'Download offline maps', priority: 2, due: null, sectionRef: null },
         { content: 'Let the dog sitter know the exact dates', priority: 2, due: null, sectionRef: null }
       ],
