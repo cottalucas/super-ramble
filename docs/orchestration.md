@@ -11,6 +11,7 @@ humans all start here. The root tool files (`CLAUDE.md`, `AGENTS.md`,
    - `docs/architecture.md`
    - `docs/design-system.md`
    - `docs/llm-pipeline.md`
+   - `docs/pipeline-learnings.md`
    - `docs/roadmap.md`
    - `docs/resolution-log.md`
 2. Challenge conflicts before building. If the task contradicts a doc, or two

@@ -3,6 +3,83 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: docs/pipeline-learnings.md added, and its first real finding fixed ("important" undercounted against "urgent")
+
+New doc, `docs/pipeline-learnings.md`, distinct from this log: this one only
+ever holds a real finding from a real trace, what was wrong, what changed
+because of it, short and dated. Everything else (every fix, every deploy,
+every doc update) still logs here as always. Added to
+`docs/orchestration.md`'s reading list right after `docs/llm-pipeline.md`,
+and to `README.md`'s Documentation section.
+
+**The first real entry, written and fixed in the same pass.** Two
+independent real data points both show "important" language landing softer
+than "urgent," despite `SYSTEM_PROMPT` already listing both words as
+priority-1 signals: the Big Sur trace's "Pack first aid kit... important"
+(priority 3, noted but deliberately not corrected on 2026-07-08, one data
+point wasn't enough to bake in a number) and today's live moving-apartment
+trace's "buy renters insurance... important" (priority 2, trace
+`ynQakgn1DZnrS7ADSVn6`, uid `ZGjRHCpURTeWKD2fll6lKKHezD43`). Full finding,
+fix, and verification detail lives in `docs/pipeline-learnings.md`'s own
+entry; summarized here per this log's own "what was done" scope:
+
+- `src/pipeline/prompt.js`'s `SYSTEM_PROMPT` and `functions/index.js`'s
+  hand-synced `STRUCTURE_SYSTEM_PROMPT_RULES` both gained one explicit
+  sentence stating "important" carries the same weight as "urgent," not a
+  softer one, closing the exact gap that let the model treat them
+  differently despite both already being listed as priority-1 words.
+  Verified identical via `scripts/check-prompt-sync.mjs`.
+- `evals/fixtures/11-important-language-priority.json` (new): the real
+  moving-apartment trace, hand-corrected on exactly the one field this
+  finding is about, everything else carried through unchanged. Verified
+  the assertion actually catches the bug, not just written and trusted:
+  temporarily reverted the fixture's `mockResponse` to the real, buggy
+  priority 2, ran `npm run eval:offline`, got a clean failure naming the
+  exact mismatch, restored, reran clean.
+- **The existing four reference examples needed a correction, not a
+  fifth.** `src/pipeline/referenceExamples.js`'s Big Sur example (copied
+  from the real promoted trace) still showed "Pack first aid kit" at its
+  own uncorrected priority 3, which would have directly contradicted the
+  newly tightened prompt line the moment it shipped, a live few-shot
+  example undermining the rule sitting right next to it. Corrected to
+  priority 1 in both hand-synced copies
+  (`src/pipeline/referenceExamples.js` and
+  `functions/referenceExamples.js`); `evals/fixtures/08-big-sur-camping-trip.json`
+  itself is untouched, only the separate copy used to teach the live model
+  changed.
+
+**What this does not prove**, stated plainly rather than implied: offline
+evals never call the real model, mocked or not. `npm run eval` proves the
+new fixture's assertion works and both prompt copies stay in sync with each
+other, not that the live model now structures "important" language
+correctly. That needs a real live call, spot-checked by hand; not run in
+this pass, no standing authorization to spend real Anthropic credits on the
+dogfooding account, the same posture the 2026-07-06 entry already
+established for this exact class of change.
+
+Verified: `npm run eval` 18/18 offline (11 fixtures, 6 negative contract
+cases, 1 guard case; the new fixture the only addition, up from 17), 12/12
+date, 26/26 todoist, prompt sync check passing. `npm run build` clean.
+`node scripts/check-secrets.mjs` clean.
+`node --check functions/index.js` clean.
+
+### Decisions not to relitigate
+
+- `docs/pipeline-learnings.md` holds only real-trace findings, one dated
+  entry per finding, with a fix and verification, never a general-purpose
+  notes file. A pass that didn't come from reading real production data
+  belongs in this log instead, even if it's a genuine improvement.
+- The Big Sur trace's "Pack first aid kit" is priority 1 in the reference
+  examples now, not the fixture's own uncorrected 3. Do not "restore" it to
+  match the fixture on the assumption that was an oversight; the fixture
+  and the reference-examples copy are allowed to diverge on this one field
+  for exactly the reason stated above, and the fixture itself is untouched
+  on purpose.
+- Four reference examples remains the right count after this finding. Do
+  not read this entry as "the four weren't enough" and add a fifth on that
+  basis; what was missing was internal consistency between an existing
+  example and a rule, not coverage of a new case.
+
 ## 2026-07-13: Both open follow-ups closed: live reference-examples spot-check and a real traces:grade run
 
 Two gaps flagged open in the two entries directly below (the reference-
