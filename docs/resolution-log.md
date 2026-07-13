@@ -3,6 +3,67 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: Reference-examples PR merged and functions deployed to super-ramble.web.app
+
+Follow-up to the "Real reference examples wired into the live Structure
+prompt" entry directly below. [PR #1](https://github.com/cottalucas/super-ramble/pull/1)
+merged to `main` after both `build-and-eval` CI runs (push and pull_request
+triggers) passed, including the new prompt-sync check. This PR touches
+`functions/`, so per this repo's own deploy discipline it needed a deploy
+and a live check, not just a green CI run.
+
+**Hosting was not redeployed, on purpose.** `src/pipeline/prompt.js` and
+`src/pipeline/referenceExamples.js` changed, but neither is imported by any
+client-side code (`SYSTEM_PROMPT` is only ever consumed by
+`functions/index.js`'s own copy and by `scripts/check-prompt-sync.mjs`, both
+outside the Vite build). Verified directly, not assumed: rebuilt `dist/`
+after the merge and grepped the output bundle for reference-example text
+("Maya's Surprise", "Big Sur Camping", "PAST REFERENCE EXAMPLES") to confirm
+none of it leaked into the client bundle. Ran `firebase deploy --only
+functions` only, matching the exact precedent the 2026-07-08
+priority-direction deploy entry already set for a prompt-text-only change.
+
+**Deploy verification, and its real limits, stated plainly.** `firebase
+deploy --only functions` reported "Successful update operation" for
+`api(us-central1)`. Beyond the exit code: an unauthenticated
+`POST https://super-ramble.web.app/api/structure` returned `401
+{"error":"unauthorized"}` both with no `Authorization` header and with a
+garbage bearer token, confirming the deployed revision is live and actually
+executing `verifyAuth` (not a stale cached response, not a crash-looping
+revision returning a generic 5xx). `GET https://super-ramble.web.app/`
+returned `200`, confirming hosting (untouched by this deploy) is still
+healthy. **This does not prove a real authenticated call now sees the
+reference-examples block**, since that code path is unreached by an
+unauthenticated probe, the same gap the 2026-07-06 entry already named for
+this exact class of change. Two ways to close it further were both
+unavailable here, same as that entry: no working `gcloud` credentials in
+this environment (`gcloud auth login` required, none configured) to inspect
+the Cloud Run revision directly, and no standing authorization to spend
+real Anthropic credits on the dogfooding account for a real authenticated
+`/api/structure` call. What is verified: the exact `functions/index.js` and
+`functions/referenceExamples.js` this PR merged is what `firebase deploy`
+packaged and uploaded (51.49 KB, matching a fresh local build immediately
+before the deploy command ran), and the deploy reported success for that
+upload. **A real authenticated live call, before/after, spot-checked by
+hand, is still the only way to confirm the live model actually sees these
+examples now**; not run here, per the PR description's own stated scope.
+This is a live-call check Lucas (or a future pass with explicit spend
+authorization) should run directly against `/api/structure` with a real ID
+token, ideally paired with `npm run traces:list` afterward to read the new
+trace back.
+
+### Decisions not to relitigate
+
+- Hosting does not need a redeploy for a `src/pipeline/*` prompt-text change
+  that no client code imports. Verify this with a bundle grep before
+  skipping the hosting deploy, the same way this pass did, rather than
+  assuming it every time; a future change to `src/pipeline` that a
+  component does start importing would need hosting redeployed too.
+- Whether the deployed `/api/structure` actually serves the new reference-
+  examples block to a real authenticated caller is still unverified as of
+  this entry. Do not mark that closed until a real live call is spot-checked
+  by hand against the deployed Function.
+
 ## 2026-07-13: Real reference examples wired into the live Structure prompt
 
 Closed a real gap: `evals/fixtures/*.json` holds hand-verified transcript-to-
