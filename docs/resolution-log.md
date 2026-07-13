@@ -3,6 +3,107 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: Editable-preview and important-priority-fix PRs merged and deployed to super-ramble.web.app
+
+Follow-up to the two entries directly below (the editable Super Ramble
+preview and the "important" priority fix). Both merged
+([PR #3](https://github.com/cottalucas/super-ramble/pull/3),
+[PR #4](https://github.com/cottalucas/super-ramble/pull/4)) after CI passed,
+then deployed and verified live, in that order.
+
+**PR #3 merge and deploy.** Merged cleanly (no conflicts against `main`).
+Deployed `firebase deploy --only hosting,functions` (this PR touches both:
+`SuperRambleModal.jsx`/`TaskRow.jsx` reach the client bundle, and the
+outcome endpoint changed in `functions/index.js`). The CLI reported success
+for both, but the first live check right after looked wrong: fetching
+`https://super-ramble.web.app/` still showed the *previous* deploy's asset
+hashes, and fetching the new asset path by its hash returned `200` with
+`content-type: text/html`, the SPA fallback, not the real file.
+**Diagnosed before concluding the deploy had failed**: `--debug` on a
+second `firebase deploy --only hosting` run showed the version
+(`.../versions/2bcc6d4a625f78fa`) was created, populated with the correct
+three file hashes, finalized, and released to the `live` channel
+end-to-end, no error anywhere in the API trace. The stale read was CDN edge
+caching (`x-cache: HIT`, `cache-control: max-age=3600`) on the specific
+edge (`cache-fra-...`) this environment happened to hit immediately after
+the first deploy, not a failed release; a few seconds later the same
+fetches returned the new hashes with a fresh `last-modified` matching the
+release timestamp. Verified byte-for-byte: downloaded the live
+`index-Yu1caoV7.js` and `diff`'d it against the local `dist/` output,
+identical. `POST /api/structure` (unauthenticated) returned `401
+{"error":"unauthorized"}`, confirming the revision is live and executing.
+**Editable-preview behavior itself was verified locally before this PR was
+even opened** (mocked `window.fetch`, see PR #3's own resolution-log
+entry); this deploy-verification pass confirms the same code is what is
+actually live, not a second functional test.
+
+**PR #4 merge and deploy.** Had a real merge conflict against `main` this
+time (both PRs prepended an entry to `docs/resolution-log.md`'s top,
+`docs/architecture.md`/`docs/llm-pipeline.md` and `functions/index.js`
+auto-merged clean). Resolved by merging `main` into the branch, keeping
+both resolution-log entries (this branch's first, `main`'s second), fixing
+two conflict-marker artifacts a first pass at the resolution missed one of,
+caught by grepping for `^<<<<<<<\|^=======\|^>>>>>>>` after the "resolved"
+commit rather than assuming the edit worked. Reran `npm run eval` after
+resolving (67/67 across the merged set) before pushing. `functions/` is
+the only thing this PR touches that a deploy needs: verified directly by
+rebuilding and grepping the fresh `dist/` bundle for `"Pack first aid
+kit"` (the reference-examples fixture text) and finding nothing, and by
+confirming the built JS asset hash was unchanged from the one already
+live, so no hosting redeploy was needed, only
+`firebase deploy --only functions`. Deploy succeeded; `POST /api/structure`
+(unauthenticated) returned `401` again, confirming the new revision is
+live and executing.
+
+**A real authenticated live call was attempted, not just skipped.** With
+real `ANTHROPIC_API_KEY` access this session (via
+`firebase functions:secrets:access`) and working Application Default
+Credentials, tried to mint a real Firebase ID token for the dogfooding
+user (`admin.auth().createCustomToken(uid)`, then exchange for an ID
+token) to make one real authenticated `/api/structure` call and directly
+confirm the "important" priority fix reached a live response. Failed at
+the first step: `createCustomToken` needs a service account credential
+capable of signing (`iam.serviceAccounts.signBlob`), which user-login
+Application Default Credentials do not carry; the error was
+`Failed to determine service account... Alternatively specify a service
+account with iam.serviceAccounts.signBlob permission`. No service account
+key exists in this environment, and generating one was out of scope for a
+verification step. This is the same class of gap several earlier entries
+in this log already hit (no way to mint a real session without either a
+real browser OAuth login or a service account key); not solved here
+either. **A real live spot-check of the "important" fix, and of the
+editable-preview feature end to end against the deployed site, still
+needs a real signed-in browser session**, Lucas's own or a future pass
+with a service account key. Stated plainly rather than left implicit.
+
+Verified: `npm run eval` 67/67 (18 fixtures/contract cases, 12 date, 26
+Todoist, 11 write) plus prompt sync check, on `main` post-merge. `npm run
+build` clean, asset hashes and byte content confirmed live for PR #3;
+confirmed unchanged (so correctly not redeployed) for PR #4. `node
+scripts/check-secrets.mjs` clean. `node --check functions/index.js` clean
+before each deploy.
+
+### Decisions not to relitigate
+
+- A `firebase deploy` success message plus an immediate stale-looking
+  fetch is not proof of a failed deploy. Check `--debug` output (or the
+  Firebase console) for the actual version/release lifecycle before
+  concluding a release failed; CDN edge caching can serve a stale response
+  for up to `max-age` (3600s here) immediately after a real, successful
+  release, especially in a build (like `index.html`) that used to be
+  cache-checked as fresh by the same edge.
+- Neither `hosting` nor `functions` deploys automatically decide their own
+  scope. Check whether a PR's changes actually reach the client bundle
+  (grep the built `dist/` output, compare the asset hash to what is
+  already live) before running a hosting deploy that changes nothing;
+  `src/pipeline/*` files with no client importer are the recurring example
+  in this repo.
+- Minting a real Firebase ID token for a live authenticated call from this
+  environment needs a service account key, not just Application Default
+  Credentials; `createCustomToken` fails without one. Do not reattempt this
+  exact approach expecting a different result absent a real service
+  account key being made available.
+
 ## 2026-07-13: docs/pipeline-learnings.md added, and its first real finding fixed ("important" undercounted against "urgent")
 
 New doc, `docs/pipeline-learnings.md`, distinct from this log: this one only
