@@ -3,6 +3,135 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: Firestore-backed reference examples and automatic grading merged and deployed; the live trigger verified against a real trace and a synthetic one
+
+Follow-up to the entry directly below (the reference-examples-to-Firestore
+and automatic-grading architecture change). Branched, PR'd
+([PR #6](https://github.com/cottalucas/super-ramble/pull/6)), CI passed,
+merged to `main` (`fc7585e`). Deployed
+`firebase deploy --only functions,firestore:rules,firestore:indexes` (this
+PR touches `functions/`, `firestore.rules`, and adds
+`firestore.indexes.json`; confirmed separately below that no client file
+this PR touched is actually imported by anything in `src/`, so hosting did
+not need a redeploy). `gradeStructureTrace` failed its first deploy attempt
+with `Permission denied while using the Eventarc Service Agent`, a known,
+one-time IAM-propagation delay for a project's first-ever 2nd-gen
+Eventarc-triggered function; waited, retried, succeeded
+(`✔ functions[gradeStructureTrace(europe-west1)] Successful create
+operation`). `firebase functions:list` confirmed both `api`
+(`us-central1`, HTTPS) and `gradeStructureTrace` (`europe-west1`, Firestore
+`document.written` trigger) live. The region split is expected, not a bug:
+Firestore triggers auto-co-locate with the Firestore database itself
+(`firebase firestore:databases:list` confirms the database is provisioned
+in `eur3`/Europe), independent of the HTTP function's own region default.
+
+**Why hosting did not need a redeploy.** This PR's only `src/` changes are
+`src/pipeline/prompt.js` (dropped the reference-examples append) and the
+addition of `functions/contracts.js` (a `functions/`-side file, not a
+`src/` one). `grep -rln "pipeline/prompt\|pipeline/contracts"` across the
+repo, excluding `functions/`, shows only local scripts import either file
+(`scripts/grade-traces.mjs`, `promote-trace.mjs`, `check-prompt-sync.mjs`,
+`review-queue.mjs`, `eval-offline.mjs`, `list-traces.mjs`) — nothing under
+`src/` imports `src/pipeline/prompt.js` at all, so its content never
+reaches the built client bundle. Checked directly rather than assumed,
+same discipline the PR #3/#4 deploy entry below already established for
+this exact class of question.
+
+**Live verification, basic grading path (a real trace, a real trigger
+firing).** Picked a real, previously-graded trace
+(`wPWKIUs0mXfeeCGRYJXx`, `outcome: confirmed`, both judge fields already
+`flag` from an earlier manual `grade-traces.mjs` run this session) and
+cleared its `judgedAt`/`judgeCompleteness`/`judgeCorrectness`/`judgeNotes`
+fields via a direct Admin SDK write, the minimum write that puts the
+trigger's own guards (`outcome` set and not `pending`, `judgedAt` absent)
+back into the state a fresh real outcome-write would produce. The trigger
+re-fired for real: a fresh `judgedAt` timestamp landed within seconds, and
+the verdict came from a genuine new Haiku call (`judgeCompleteness`
+flipped from `flag` to `ok` between the two runs, `judgeCorrectness`
+stayed `flag` — the kind of small drift a real independent LLM call
+produces, not a cached result). Confirmed the resulting write was correct
+for a plain `confirmed` outcome: exactly one new `pipelineLearningLog`
+entry (`kind: "flagged"`), and `referenceExamples` untouched (still 4
+seed documents) — no promotion attempted, as designed, since `outcome`
+was `confirmed`, not `confirmed_with_edits`.
+
+**Live verification, full auto-promotion path (synthetic, clearly
+labeled).** No real trace in production has `outcome: "confirmed_with_edits"`
+yet — checked all 12 real traces under the dogfooding uid before this
+pass began; every one is a plain `confirmed` or `cancelled`. Rather than
+leave the reconstruct-validate-promote branch of `gradeStructureTrace`
+unverified against the real deployed function, wrote one synthetic test
+trace directly to Firestore (`users/{uid}/structureTraces/zzz-live-verify-
+auto-promotion-DELETE-ME`): real, already-grounded transcript and response
+content (the same Big Sur camping trip case used elsewhere in this repo),
+`outcome: "confirmed_with_edits"`, and a realistic `edits` diff a real user
+edit would produce (a project rename, one task's content reworded, one
+task removed). The trigger fired for real against this document, exactly
+as it would for a genuine user action: graded it (flagged, same as the
+real trace above), reconstructed the corrected tree, validated it, and
+wrote a new `referenceExamples` document with `source: "auto-promoted"`
+and the correct `promotedFromTraceId`. Read back and confirmed field by
+field: the project rename, the reworded task content, and the task removal
+were all present and correct in the written tree; a matching
+`pipelineLearningLog` entry (`kind: "auto-promoted"`) was also written.
+This confirms the trigger's reconstruction, contract validation, grounding
+check, Firestore write, and cap-enforcement logic all run correctly
+end-to-end in the real deployed environment, not just in the offline unit
+tests written during development. **Stated plainly, per this pass's own
+instruction to name what was not fully verified**: this exercised the
+trigger's own logic for real, but not a real user's actual edit made
+through the deployed browser UI — no such trace exists yet to test
+against, so that specific half of "real end-to-end" (a real person editing
+a real preview, confirming, and watching their own correction get
+auto-promoted) remains unobserved. All three artifacts this test created
+(the synthetic trace, the `auto-promoted` `referenceExamples` document, and
+the `pipelineLearningLog` entry) were deleted immediately after
+verification; `referenceExamples` was confirmed back to exactly the 4
+original seed documents afterward, and the one real `pipelineLearningLog`
+entry from the basic-grading verification above was confirmed to still be
+the only real entry present. No production data was left polluted by
+either test.
+
+**README verified live on GitHub `main`.** Fetched
+`github.com/cottalucas/super-ramble/blob/main/README.md`, confirmed the
+page is serving commit `fc7585e` (this PR's merge commit). Text-extracted
+and read the full "Does this get smarter over time?" section, the "Key
+files" list, and the "Documentation" section verbatim against what was
+written; all matched. The "For developers" `<details>` block is collapsed
+in the rendered DOM and this session's browser-automation tools could not
+expand or screenshot it reliably (the screenshot renderer returned blank
+frames and `scroll` timed out repeatedly this session, a tooling issue,
+not a content issue); verified that section instead by reading the local
+`README.md` at the same commit `main` is already on, confirming "Run
+locally" is absent and the rest of "For developers" (evals, watch spend,
+privacy) is intact.
+
+Verified: `npm run eval` was already green pre-merge (see the entry
+below). Post-deploy, live: `gradeStructureTrace` re-grades a real trace on
+a real Firestore write (confirmed above), the full auto-promotion branch
+runs correctly end-to-end against the real deployed function (confirmed
+above, synthetic input, cleaned up after), `referenceExamples` correctly
+holds only the 4 seed documents in steady state, and the README is
+correctly live on GitHub `main`. Not verified: a real user's own edit,
+made through the deployed browser UI, triggering a real auto-promotion —
+no such trace exists in production yet.
+
+### Decisions not to relitigate
+
+- A `firebase deploy` success message is not itself live verification.
+  Forcing a real trigger firing (by writing/clearing the exact fields its
+  own guards check) and reading back the result is; this pass did that for
+  both the basic-grading and full-auto-promotion branches of
+  `gradeStructureTrace`.
+- When no real trace exists yet to exercise a code path a deploy needs
+  verified, write one synthetic-but-realistic test document directly
+  (matching this app's `confirmed_with_edits` shape and using otherwise-
+  real, grounded content), let the real deployed trigger act on it, then
+  delete every artifact it created. This tests the trigger's own logic for
+  real without leaving fake data in the live-serving `referenceExamples`
+  pool or the real user's trace history. State plainly that this is not
+  the same as a real end-to-end user action when it isn't.
+
 ## 2026-07-13: Reference examples moved to Firestore; grading and a bounded auto-promotion path made automatic
 
 A real architecture change, not a docs pass: `referenceExamples` moved out
