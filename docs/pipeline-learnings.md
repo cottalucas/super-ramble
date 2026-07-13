@@ -10,21 +10,37 @@ instead.
 
 ## How to add an entry
 
-1. `npm run traces:grade -- --uid <uid>` first, so the automatic flags
-   (`judgeCompleteness`/`judgeCorrectness`) narrow what's worth reading
-   before you read anything by hand. It only flags; it never picks the fix
-   for you.
-2. `npm run traces:list -- --uid <uid>` against a real uid. Cancelled and
-   confirmed-with-edits traces sort first, the highest-signal cases; a
-   flagged trace from step 1 is worth a look too, but its verdict still
-   needs a real read, not a rubber stamp (`docs/llm-pipeline.md`).
-3. Pick one trace worth a permanent fix, not every trace with a rough edge.
+Grading and a first round of triage are automatic now
+(`docs/llm-pipeline.md`'s "Automatic grading" and "Auto-promotion"
+sections): a Firestore trigger grades every real trace the moment its
+outcome is written, and when a user's own correction and the grader's
+independent flag agree, the corrected tree is already in
+`referenceExamples` before anyone reads anything. Most of what used to be
+manual steps here now happen on their own; what is still a real human
+decision is scoped narrower and sharper because of it.
+
+1. `npm run review-queue` lists what the automatic pass could not resolve
+   on its own, oldest first: a cancelled trace the grader flagged, a plain
+   confirm the grader flagged, or a confirmed-with-edits trace whose
+   auto-promotion attempt could not be completed (stated plainly in its own
+   summary, `docs/llm-pipeline.md`'s "Auto-promotion" section covers the
+   real reasons this happens). This is the actual starting point now, not
+   `npm run traces:list` against the raw collection; the automatic pass has
+   already done the narrowing `traces:grade` used to do by hand.
+2. Read the flagged entry's underlying trace directly
+   (`npm run traces:list -- --uid <uid>`, or the trace id the queue prints)
+   before deciding anything. A grader's flag is not a rubber stamp any more
+   than a user's Confirm click ever was; both are a reason to look, not a
+   verdict to trust blindly.
+3. Pick one trace worth a permanent fix, not every entry in the queue.
    Quality of finding over quantity, the same discipline the eval-flywheel
    review cadence already uses for fixture promotion.
 4. Decide what kind of fix it needs: a prompt edit
-   (`src/pipeline/prompt.js`, mirrored into `functions/index.js`), a new or
-   corrected reference example (`src/pipeline/referenceExamples.js`,
-   mirrored into `functions/referenceExamples.js`), a new
+   (`src/pipeline/prompt.js`, mirrored into `functions/index.js`'s
+   `STRUCTURE_SYSTEM_PROMPT_RULES`), a manual promotion into
+   `referenceExamples` the automatic pass couldn't make on its own
+   (`npm run review-queue -- --resolve <logId> --promote`, reusing
+   `scripts/promote-trace.mjs`'s own validation), a new
    `evals/fixtures/*.json` entry, or some combination. Not every finding
    needs all three; state which ones this entry actually needs and why.
 5. Write one dated entry below: the real evidence (which trace, what the
@@ -32,6 +48,13 @@ instead.
    verified. Then hand that entry to an agent as the fix's spec, the same
    way this repo's own tasks get handed off: the entry states the finding
    and the intended fix, the agent implements and verifies it.
+6. `npm run sync-learnings` mirrors what the automatic pass itself resolved
+   (an auto-promotion, or a queue entry marked resolved without a code
+   change) into this file as its own short, dated line, separate from a
+   hand-written entry like the one below. Not every line in this file is
+   written by a person reading a trace; some are the flywheel logging its
+   own decision. Both kinds stay real findings from real traces, neither is
+   invented.
 
 ---
 

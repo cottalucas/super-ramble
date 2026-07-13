@@ -28,11 +28,12 @@
 // still runs exactly once, client-side, in src/pipeline/structure.js.
 
 const { onRequest } = require('firebase-functions/v2/https');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const Anthropic = require('@anthropic-ai/sdk');
 const { buildSyncCommands, isTokenExpired } = require('./todoist.js');
-const { REFERENCE_EXAMPLES, formatReferenceExamples } = require('./referenceExamples.js');
+const { validateStructure, ungroundedContents } = require('./contracts.js');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -149,16 +150,64 @@ const STRUCTURE_SYSTEM_PROMPT_RULES = [
   'Never reference an internal id in clarificationQuestion, or anywhere else a person reads. An id like "ARW606qp9EbPUAPK1Ypa" means nothing to a user; there is no way for them to answer a question that asks them to choose one. If two or more existingProjects share the same name and routing is genuinely ambiguous, ask the user to disambiguate in their own words instead: a distinguishing detail they would know (what it is for, roughly when they made it), or simply note that two projects share that name and ask which one they mean. Never resolve that ambiguity by stating an id.'
 ].join('\n');
 
-// A curated set of worked examples (functions/referenceExamples.js, mirroring
-// src/pipeline/referenceExamples.js) is appended below the rules, so the
-// live model sees real structuring examples, not just written instructions.
+// Worked examples used to be a second hand-synced file
+// (functions/referenceExamples.js, mirroring src/pipeline/referenceExamples.js).
+// They now live in Firestore's referenceExamples/ collection instead, so
+// every real call sees whatever the pool currently holds, including
+// examples added automatically since the app last deployed, not a value
+// frozen at build time. fetchReferenceExamples/formatReferenceExamples
+// below assemble the same labeled block the old file-based version did, at
+// request time, inside the /api/structure handler; there is no static
+// STRUCTURE_SYSTEM_PROMPT constant anymore; STRUCTURE_SYSTEM_PROMPT_RULES
+// above is still the whole hand-synced-with-src/pipeline/prompt.js half.
 // See docs/llm-pipeline.md, Stage 2, and docs/resolution-log.md.
-const STRUCTURE_SYSTEM_PROMPT = [
-  STRUCTURE_SYSTEM_PROMPT_RULES,
-  '',
-  formatReferenceExamples(REFERENCE_EXAMPLES)
-].join('\n');
-exports.STRUCTURE_SYSTEM_PROMPT = STRUCTURE_SYSTEM_PROMPT;
+
+/** One line describing what an example is, for its label in the prompt block. */
+function describeReferenceExample(ex) {
+  if (ex.response.decision === 'tasks') return 'tasks, no project';
+  const name = ex.response.project && ex.response.project.name;
+  return name ? `project: ${name}` : 'project';
+}
+
+/**
+ * Format a list of { transcript, response } reference examples into the
+ * same labeled PAST REFERENCE EXAMPLES block the file-based version used to
+ * produce. Marked plainly as historical reference material so it is never
+ * confused with the current call's live transcript: this matters for
+ * isGroundedInTranscript below, which only ever checks a response's content
+ * against the real transcript argument for THIS call, never against
+ * anything in this block.
+ */
+function formatReferenceExamples(examples) {
+  const blocks = examples.map((ex, i) =>
+    [
+      `Example ${i + 1} (${describeReferenceExample(ex)})`,
+      `TRANSCRIPT: ${ex.transcript}`,
+      `RESPONSE: ${JSON.stringify(ex.response)}`
+    ].join('\n')
+  );
+
+  return [
+    'PAST REFERENCE EXAMPLES',
+    "The examples below are worked examples from prior sessions, shown only to illustrate the structuring conventions above: how nested sub-tasks come from dependent steps, when sections earn their keep, and when the right call is loose tasks instead of a project. They are historical reference material, not the current user's transcript. Never route content to them, never copy their wording into the response, and never treat anything in them as something the current user said. Ground every fact in the real TRANSCRIPT that follows this block.",
+    '',
+    blocks.join('\n\n')
+  ].join('\n');
+}
+
+// Ordered newest-first, capped at 30: a growing pool stays bounded (see the
+// auto-promotion trigger below, which enforces the same 30 cap on write by
+// deleting the oldest auto-promoted document, never a seed one), and
+// newest-first means a recent correction is felt in the live prompt sooner
+// than an old one would need to scroll into view. No composite index
+// needed: a single-field orderBy on a top-level collection is auto-indexed.
+async function fetchReferenceExamples() {
+  const snap = await db.collection('referenceExamples').orderBy('addedAt', 'desc').limit(30).get();
+  return snap.docs.map((doc) => {
+    const data = doc.data();
+    return { transcript: data.transcript, response: data.response };
+  });
+}
 
 // Mirrors src/pipeline/contracts.js's validateStructure exactly: same keys,
 // same required/optional split (sections, a task's sectionRef and subtasks
@@ -548,6 +597,26 @@ exports.api = onRequest(
           return;
         }
 
+        // Fetched fresh on every call, not cached in memory across
+        // invocations: the whole point of moving this pool to Firestore is
+        // that an auto-promotion (or a manual seed edit) is felt by the very
+        // next real call, not only after a redeploy. A Firestore hiccup here
+        // must not turn a working structuring call into a 500; an empty
+        // examples array degrades gracefully to "written rules only", the
+        // exact prompt shape this app ran before reference examples existed
+        // at all, not a failure.
+        let referenceExamples = [];
+        try {
+          referenceExamples = await fetchReferenceExamples();
+        } catch (err) {
+          console.error('fetchReferenceExamples failed, continuing with written rules only', {
+            errorMessage: String(err?.message ?? err)
+          });
+        }
+        const structureSystemPrompt = referenceExamples.length
+          ? [STRUCTURE_SYSTEM_PROMPT_RULES, '', formatReferenceExamples(referenceExamples)].join('\n')
+          : STRUCTURE_SYSTEM_PROMPT_RULES;
+
         const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });
         const response = await client.messages.create({
           // 8192, not 4096: a rich multi-section dump (several workstreams,
@@ -557,7 +626,7 @@ exports.api = onRequest(
           // malformed response. See docs/resolution-log.md, 2026-07-07.
           model: ANTHROPIC_STRUCTURE_MODEL,
           max_tokens: 8192,
-          system: STRUCTURE_SYSTEM_PROMPT,
+          system: structureSystemPrompt,
           messages: [
             {
               role: 'user',
@@ -938,5 +1007,287 @@ exports.api = onRequest(
       console.error(err);
       res.status(500).json({ error: 'internal error' });
     }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Automatic grading and auto-promotion, triggered on structureTraces writes.
+//
+// This never runs as part of a live user request; it fires asynchronously,
+// after POST /api/structure/outcome has already responded to the client.
+// Mirrors scripts/grade-traces.mjs's exact grading call (same model rule:
+// this app's default Haiku, never Sonnet, never confused with or billed
+// against the real Structure call). grade-traces.mjs itself is unchanged and
+// stays a manual backfill tool for traces that predate this trigger, or for
+// re-running by hand; this is a THIRD hand-synced copy of the same grading
+// logic, on top of STRUCTURE_SYSTEM_PROMPT_RULES and contracts.js above,
+// the same "kept in sync by hand" trade-off this codebase has already made
+// twice and accepted rather than restructure functions/ into an importable
+// ESM package. See docs/resolution-log.md.
+
+const GRADE_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+const HAIKU_INPUT_USD_PER_MTOK = 1;
+const HAIKU_OUTPUT_USD_PER_MTOK = 5;
+const REFERENCE_EXAMPLES_CAP = 30;
+
+const GRADE_SYSTEM_PROMPT = [
+  'You are a quality checker for a task-structuring tool, not the tool itself. You will be shown a transcript someone rambled and the structured response another model already produced from it. You do not restructure anything; you only judge what is already there.',
+  'Check two things, independently:',
+  '1. completeness: does anything mentioned in the transcript seem to be missing from the response (a task, a sub-task, a stated detail)? "ok" if nothing meaningful is missing, "flag" if something the transcript clearly asked for is absent.',
+  '2. correctness: do the response\'s priorities and due dates look defensible given the transcript\'s own wording (its urgency language, its named dates)? "ok" if defensible, "flag" if a priority or due date looks backward or unsupported by anything the transcript actually said.',
+  'Give a one-line reason for each verdict, in plain language, naming the specific task or phrase involved when you flag something. Do not invent detail the transcript does not contain, and do not judge style, tone, or project naming, only completeness and priority/due defensibility.'
+].join('\n');
+
+function buildGradeUserPrompt(transcript, response) {
+  return ['TRANSCRIPT:', transcript, '', 'RESPONSE TO JUDGE:', JSON.stringify(response), '', 'Return your judgment now.'].join(
+    '\n'
+  );
+}
+
+const GRADE_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    completeness: { enum: ['ok', 'flag'] },
+    completenessReason: { type: 'string' },
+    correctness: { enum: ['ok', 'flag'] },
+    correctnessReason: { type: 'string' }
+  },
+  required: ['completeness', 'completenessReason', 'correctness', 'correctnessReason'],
+  additionalProperties: false
+};
+
+async function gradeTrace(anthropicApiKey, transcript, response) {
+  const client = new Anthropic({ apiKey: anthropicApiKey });
+  const apiResponse = await client.messages.create({
+    model: GRADE_MODEL,
+    max_tokens: 512,
+    system: GRADE_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: buildGradeUserPrompt(transcript, response) }],
+    output_config: { format: { type: 'json_schema', schema: GRADE_JSON_SCHEMA } }
+  });
+
+  const inputTokens = apiResponse.usage?.input_tokens || 0;
+  const outputTokens = apiResponse.usage?.output_tokens || 0;
+  const costUsd = (inputTokens / 1_000_000) * HAIKU_INPUT_USD_PER_MTOK + (outputTokens / 1_000_000) * HAIKU_OUTPUT_USD_PER_MTOK;
+
+  const text = (apiResponse.content || [])
+    .filter((b) => b && b.type === 'text')
+    .map((b) => b.text)
+    .join('');
+  const verdict = JSON.parse(text);
+  return { verdict, costUsd };
+}
+
+// Reconstructs the corrected tree a confirmed_with_edits trace's Confirm
+// click actually wrote, from the model's real, untouched `response` plus
+// the separate `edits` diff (docs/architecture.md's structureTraces field
+// list): the trace schema only ever persists what changed, not a second
+// full corrected tree, so this replays the diff onto a clone of the
+// original. Content edits are always reliably applied: `originalContent`
+// is captured client-side on the first edit, before any change, so it
+// always matches the pristine response. Removals are reliable in the
+// common case (a task removed without ever being content-edited first) but
+// NOT for the "edited, then removed" sequence: the client's own
+// removeTask drops any pending contentEdits entry for a removed task
+// (SuperRambleModal.jsx), so `removedTasks[].content` in that sequence
+// holds the edited text, which was never written back into `response` by
+// a matching contentEdits entry either, and this function has no way to
+// recover what the task's original content was. When a removal can't be
+// matched, this is surfaced in `warnings` rather than guessed at; the
+// caller treats any warning as "do not auto-promote this one", the same
+// fail-closed posture the rest of this pipeline already takes on anything
+// it cannot verify.
+function reconstructCorrectedTree(response, edits) {
+  const tree = JSON.parse(JSON.stringify(response));
+  const warnings = [];
+
+  if (edits.projectNameChange && tree.project && typeof tree.project.name === 'string') {
+    tree.project.name = edits.projectNameChange.to;
+  }
+
+  for (const edit of edits.contentEdits || []) {
+    let applied = false;
+    for (const t of tree.tasks || []) {
+      if (t.content === edit.originalContent) {
+        t.content = edit.newContent;
+        applied = true;
+        break;
+      }
+      const subIndex = (t.subtasks || []).findIndex((s) => s.content === edit.originalContent);
+      if (subIndex !== -1) {
+        t.subtasks[subIndex].content = edit.newContent;
+        applied = true;
+        break;
+      }
+    }
+    if (!applied) warnings.push(`content edit target not found: "${edit.originalContent}"`);
+  }
+
+  for (const removed of edits.removedTasks || []) {
+    let found = false;
+    const rootIndex = (tree.tasks || []).findIndex((t) => t.content === removed.content);
+    if (rootIndex !== -1) {
+      tree.tasks.splice(rootIndex, 1);
+      found = true;
+    } else {
+      for (const t of tree.tasks || []) {
+        const subIndex = (t.subtasks || []).findIndex((s) => s.content === removed.content);
+        if (subIndex !== -1) {
+          t.subtasks.splice(subIndex, 1);
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found) warnings.push(`removed task not found in reconstructed tree: "${removed.content}"`);
+  }
+
+  return { tree, warnings };
+}
+
+// referenceExamples/ stays bounded so the live prompt (and its own token
+// cost) never grows unbounded from auto-promotion alone: once a write
+// would take the collection over the cap, the oldest auto-promoted
+// document is deleted, never a seed one (the 4 hand-picked originals are
+// permanent, curated on purpose; only what accumulated on top is pruned).
+async function enforceReferenceExamplesCap() {
+  const snap = await db.collection('referenceExamples').get();
+  if (snap.size <= REFERENCE_EXAMPLES_CAP) return;
+  const autoPromoted = snap.docs
+    .filter((d) => d.data().source === 'auto-promoted')
+    .sort((a, b) => (a.data().addedAt?.toMillis?.() ?? 0) - (b.data().addedAt?.toMillis?.() ?? 0));
+  if (autoPromoted.length === 0) return; // over cap on seed docs alone; nothing safe to prune
+  await autoPromoted[0].ref.delete();
+}
+
+function summarize(verdict) {
+  return `Completeness: ${verdict.completenessReason} Correctness: ${verdict.correctnessReason}`.slice(0, 300);
+}
+
+// uid is not in this task's own field list, but is written anyway: without
+// it, scripts/review-queue.mjs (a top-level pipelineLearningLog reader) has
+// no way to find the trace back under its owning users/{uid}/structureTraces
+// subcollection to review or promote it. A real, functionally required
+// addition, not scope creep.
+async function logPipelineLearning({ kind, uid, traceId, summary }) {
+  await db.collection('pipelineLearningLog').add({
+    date: admin.firestore.FieldValue.serverTimestamp(),
+    kind,
+    uid,
+    traceId,
+    summary,
+    resolved: false
+  });
+}
+
+exports.gradeStructureTrace = onDocumentWritten(
+  { document: 'users/{uid}/structureTraces/{traceId}', secrets: [ANTHROPIC_API_KEY] },
+  async (event) => {
+    const after = event.data?.after;
+    if (!after || !after.exists) return; // deleted, nothing to grade
+
+    const afterData = after.data();
+    const { uid, traceId } = event.params;
+
+    // Guards, in order: not a write-failure marker (nothing to grade); has
+    // a real outcome yet (not "pending", still awaiting the user); not
+    // already graded. This last check is what stops this trigger's own
+    // merge write (below) from retriggering itself: that write sets
+    // judgedAt, so the resulting second invocation sees it here and returns
+    // immediately, one extra no-op invocation, never a loop. Verified this
+    // is the actual mechanism, not assumed: see docs/resolution-log.md.
+    if (afterData.traceWriteFailed) return;
+    if (!afterData.outcome || afterData.outcome === 'pending') return;
+    if (afterData.judgedAt) return;
+    if (!afterData.response || typeof afterData.transcript !== 'string') return;
+
+    let verdict;
+    try {
+      const graded = await gradeTrace(ANTHROPIC_API_KEY.value(), afterData.transcript, afterData.response);
+      verdict = graded.verdict;
+    } catch (err) {
+      console.error('gradeStructureTrace: grading call failed', { traceId, errorMessage: String(err?.message ?? err) });
+      return; // leave judgedAt unset; scripts/grade-traces.mjs can pick this trace up as a manual backfill later
+    }
+
+    const judgeNotes = summarize(verdict);
+    await after.ref.set(
+      {
+        judgeCompleteness: verdict.completeness,
+        judgeCorrectness: verdict.correctness,
+        judgeNotes,
+        judgedAt: admin.firestore.FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+
+    const flagged = verdict.completeness === 'flag' || verdict.correctness === 'flag';
+    if (!flagged) return; // nothing wrong by either signal; nothing worth a human's monthly attention
+
+    // Auto-promotion only ever applies to a confirmed_with_edits trace the
+    // grader also flagged: the user's own correction and the grader's
+    // independent read agreeing is the two-signal bar this pass sets for
+    // "automatic," per docs/pipeline-learnings.md. Every other flagged case
+    // (cancelled, or a plain confirm with nothing edited) has no corrected
+    // tree to promote from in the first place, so it is logged for the
+    // monthly human check instead, the same bucket a failed auto-promotion
+    // attempt below also falls into.
+    if (afterData.outcome === 'confirmed_with_edits' && afterData.edits) {
+      // A reference example must stay generic and reusable across any call,
+      // never tied to one real historical Firestore id: the four hand-picked
+      // originals all have targetProjectId: null already, not by accident.
+      // A routing trace's targetProjectId is a real internal id specific to
+      // this one account; baking it into a teaching example would leak it
+      // into every future live prompt. Skipped, not attempted.
+      if (afterData.response.targetProjectId) {
+        await logPipelineLearning({
+          kind: 'flagged',
+          uid,
+          traceId,
+          summary: `Not auto-promoted (routes to an existing project by internal id, not reusable as a teaching example). ${judgeNotes}`
+        });
+        return;
+      }
+
+      const { tree, warnings } = reconstructCorrectedTree(afterData.response, afterData.edits);
+
+      if (warnings.length) {
+        await logPipelineLearning({
+          kind: 'flagged',
+          uid,
+          traceId,
+          summary: `Not auto-promoted (could not fully reconstruct the corrected tree: ${warnings.join('; ')}). ${judgeNotes}`
+        });
+        return;
+      }
+
+      const { valid, errors } = validateStructure(tree, { existingProjectIds: [] });
+      const ungrounded = valid ? ungroundedContents(tree, afterData.transcript) : [];
+      if (!valid || ungrounded.length) {
+        const reason = !valid ? errors.join('; ') : `invented content: ${ungrounded.join(', ')}`;
+        await logPipelineLearning({
+          kind: 'flagged',
+          uid,
+          traceId,
+          summary: `Not auto-promoted (reconstructed tree failed contract validation: ${reason}). ${judgeNotes}`
+        });
+        return;
+      }
+
+      await db.collection('referenceExamples').add({
+        transcript: afterData.transcript,
+        response: tree,
+        source: 'auto-promoted',
+        addedAt: admin.firestore.FieldValue.serverTimestamp(),
+        promotedFromTraceId: traceId,
+        notes: judgeNotes
+      });
+      await enforceReferenceExamplesCap();
+
+      await logPipelineLearning({ kind: 'auto-promoted', uid, traceId, summary: judgeNotes });
+      return;
+    }
+
+    await logPipelineLearning({ kind: 'flagged', uid, traceId, summary: judgeNotes });
   }
 );

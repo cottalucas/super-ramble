@@ -14,13 +14,15 @@
 // Functions deploys only the functions/ directory, so it cannot import this
 // ESM module. See docs/resolution-log.md.
 //
-// A curated set of worked examples (src/pipeline/referenceExamples.js) is
-// appended below the rules, so the live model sees real structuring
-// examples, not just written instructions. See docs/llm-pipeline.md, Stage 2.
+// Reference examples used to live here too (src/pipeline/referenceExamples.js,
+// appended below the rules) but moved to Firestore's referenceExamples/
+// collection, fetched and appended at request time by functions/index.js's
+// /api/structure handler instead: this module has no Firestore access and
+// is not the one place that assembles the live prompt anymore, only the
+// written-rules half of it. See docs/llm-pipeline.md, Stage 2, and the
+// resolution log entry describing the move.
 
-import { REFERENCE_EXAMPLES, formatReferenceExamples } from './referenceExamples.js';
-
-const STRUCTURING_RULES = [
+export const SYSTEM_PROMPT = [
   'You turn what someone rambled into Todoist structure. You do not do the work they described.',
   'Decide one of two shapes:',
   '- "project": what they said describes one coherent effort. Synthesize a project with nested sub-tasks.',
@@ -35,8 +37,6 @@ const STRUCTURING_RULES = [
   'Priority runs 1 to 4, and 1 is the most urgent, the red flag, while 4 means no priority at all, the default when nothing in the transcript signals urgency. Map "urgent," "ASAP," "important," "that one is critical," or a task tied to a near, named deadline toward 1. Map "not urgent," "no rush," or "whenever" toward 4. Get the direction right: the more urgent the words, the lower the number. "Important" carries the same weight as "urgent," not a softer one: a task the speaker calls out as important gets priority 1 too, not quietly downgraded to 2 or 3 just because the word itself reads gentler than "urgent" in everyday English.',
   'Never reference an internal id in clarificationQuestion, or anywhere else a person reads. An id like "ARW606qp9EbPUAPK1Ypa" means nothing to a user; there is no way for them to answer a question that asks them to choose one. If two or more existingProjects share the same name and routing is genuinely ambiguous, ask the user to disambiguate in their own words instead: a distinguishing detail they would know (what it is for, roughly when they made it), or simply note that two projects share that name and ask which one they mean. Never resolve that ambiguity by stating an id.'
 ].join('\n');
-
-export const SYSTEM_PROMPT = [STRUCTURING_RULES, '', formatReferenceExamples(REFERENCE_EXAMPLES)].join('\n');
 
 /**
  * Build the user prompt for one structuring call. When priorErrors is set,

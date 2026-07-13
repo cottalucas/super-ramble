@@ -1,36 +1,38 @@
-// Curated worked examples injected into the live Structure prompt, so the
-// real model call sees examples of good structuring, not just written rules
-// in SYSTEM_PROMPT. Distinct from evals/fixtures/*.json: fixtures test the
-// pipeline's own plumbing (offline, mocked, no real call); this array teaches
-// the live model. See docs/llm-pipeline.md, Stage 2.
+// Seeds (or re-seeds) the 4 hand-picked original examples into the
+// referenceExamples/{id} Firestore collection, source: "seed". Ran once as
+// part of the pass that moved reference examples out of source files and
+// into Firestore (docs/resolution-log.md); src/pipeline/referenceExamples.js
+// and functions/referenceExamples.js, the two files these were originally
+// hand-picked from, are gone now, deleted once that first run was confirmed.
+// The data lives here as a literal array instead, not imported from those
+// now-deleted files, so this script stays genuinely re-runnable as a
+// disaster-recovery tool (the collection gets wiped or corrupted, a fresh
+// environment needs seeding), not a one-shot script that would throw on a
+// missing import the moment anyone ran it a second time. Copied verbatim
+// from the deleted src/pipeline/referenceExamples.js, not retyped, at the
+// time of that file's deletion.
 //
-// Each entry's transcript and response are copied verbatim from an existing
-// fixture (transcript / mockResponse), not retyped, so this stays real,
-// hand-verified data:
-//   - 01-clear-single-project.json:  one clean project with nested sub-tasks
-//   - 08-big-sur-camping-trip.json:  a real multi-section trip, the
-//     priority-corrected version (docs/resolution-log.md, 2026-07-08), not
-//     the raw buggy trace. "Pack first aid kit" here is priority 1, not the
-//     fixture's own uncorrected 3: docs/pipeline-learnings.md, 2026-07-13,
-//     found real "important" language landing softer than "urgent" twice,
-//     and a worked example still showing 3 would have kept contradicting
-//     the tightened prompt rule fixing exactly that. The fixture itself
-//     (evals/fixtures/08-big-sur-camping-trip.json) is untouched; only this
-//     copy of that response, used to teach the live model, changed.
-//   - 06-no-mega-restructure.json:   a restraint example, unrelated items
-//     that must NOT become a project
-//   - 07-sections-when-they-help.json: a project where sections earn their
-//     keep
+// Follows scripts/list-traces.mjs's exact pattern: firebase-admin with
+// Application Default Credentials, a local script a human runs by hand, not
+// something a live request ever touches.
 //
-// This file must be kept in sync by hand with functions/referenceExamples.js:
-// Firebase Functions deploys only the functions/ directory and cannot import
-// this ESM module, the same constraint that already forces
-// src/pipeline/prompt.js and functions/index.js's STRUCTURE_SYSTEM_PROMPT to
-// be hand-synced (docs/resolution-log.md, 2026-07-06). scripts/check-prompt-sync.mjs
-// diffs both copies and fails CI if they drift; don't let this duplication
-// rot silently a fourth time.
+// NOT safe to blindly re-run against a healthy collection: Firestore add()
+// always creates a new document, so running this against a collection that
+// already has these 4 seed docs doubles them. Meant for the original seed or
+// a genuine disaster-recovery reseed after confirming the collection is
+// actually empty or missing these; --dry-run first, or check the collection
+// directly, before trusting a run landed correctly, the same discipline
+// every other migration-shaped script in this repo follows.
+//
+// One-time local prerequisite, once per machine:
+//   gcloud auth application-default login
+// against the super-ramble GCP project.
+//
+// Run: node scripts/seed-reference-examples.mjs [--dry-run]
 
-export const REFERENCE_EXAMPLES = [
+import admin from 'firebase-admin';
+
+const SEED_EXAMPLES = [
   {
     transcript:
       "Okay so I want to throw a surprise birthday party for Maya next month. I need to book a venue, send out invites to the group, order a cake, and figure out the playlist. For the invites I should make a guest list first and then send the messages.",
@@ -146,38 +148,42 @@ export const REFERENCE_EXAMPLES = [
   }
 ];
 
-/** One line describing what an example is, for its label in the prompt block. */
-function describeExample(ex) {
-  if (ex.response.decision === 'tasks') return 'tasks, no project';
-  const name = ex.response.project && ex.response.project.name;
-  return name ? `project: ${name}` : 'project';
+const dryRun = process.argv.includes('--dry-run');
+
+async function main() {
+  console.log(`Seeding ${SEED_EXAMPLES.length} reference example(s) into Firestore's referenceExamples/ collection.`);
+
+  if (dryRun) {
+    console.log('--dry-run: not writing anything. Examples that would be seeded:');
+    SEED_EXAMPLES.forEach((ex, i) => {
+      console.log(`  ${i + 1}. ${ex.transcript.slice(0, 70)}...`);
+    });
+    return;
+  }
+
+  admin.initializeApp({ credential: admin.credential.applicationDefault(), projectId: 'super-ramble' });
+  const db = admin.firestore();
+  const col = db.collection('referenceExamples');
+
+  const ids = [];
+  for (const ex of SEED_EXAMPLES) {
+    const ref = await col.add({
+      transcript: ex.transcript,
+      response: ex.response,
+      source: 'seed',
+      addedAt: admin.firestore.FieldValue.serverTimestamp(),
+      promotedFromTraceId: null,
+      notes: null
+    });
+    ids.push(ref.id);
+    console.log(`  wrote ${ref.id}`);
+  }
+
+  console.log(`\nDone. ${ids.length} document(s) written: ${ids.join(', ')}`);
+  console.log('Confirm the count in the Firestore console or via a quick read before trusting it.');
 }
 
-/**
- * Format REFERENCE_EXAMPLES into a labeled prompt block. Marked plainly as
- * past, historical reference material so it is never confused with the
- * actual transcript being structured this call: this matters for
- * src/pipeline/contracts.js's isGroundedInTranscript no-invention guard,
- * which only ever checks a response's content against the real transcript
- * argument passed to structureTranscript, never against this block, but a
- * clearly labeled block also keeps the model itself from drawing on these
- * examples' own wording as if it were live user data.
- * @param {{ transcript: string, response: object }[]} examples
- * @returns {string}
- */
-export function formatReferenceExamples(examples) {
-  const blocks = examples.map((ex, i) =>
-    [
-      `Example ${i + 1} (${describeExample(ex)})`,
-      `TRANSCRIPT: ${ex.transcript}`,
-      `RESPONSE: ${JSON.stringify(ex.response)}`
-    ].join('\n')
-  );
-
-  return [
-    'PAST REFERENCE EXAMPLES',
-    "The examples below are worked examples from prior sessions, shown only to illustrate the structuring conventions above: how nested sub-tasks come from dependent steps, when sections earn their keep, and when the right call is loose tasks instead of a project. They are historical reference material, not the current user's transcript. Never route content to them, never copy their wording into the response, and never treat anything in them as something the current user said. Ground every fact in the real TRANSCRIPT that follows this block.",
-    '',
-    blocks.join('\n\n')
-  ].join('\n');
-}
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

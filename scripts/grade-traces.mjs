@@ -1,5 +1,16 @@
-// Cheap, automatic quality check on saved structureTraces, so nobody has to
-// read a growing trace collection blind. Follows scripts/list-traces.mjs and
+// Manual backfill tool, as of the pass that made grading automatic
+// (docs/resolution-log.md): functions/index.js's gradeStructureTrace
+// Firestore trigger now grades a trace itself, the moment its outcome is
+// written, so a real, currently-flowing trace no longer needs this script
+// run against it by hand. This script still exists, unchanged in what it
+// does, for two real cases the trigger cannot cover: traces written before
+// the trigger existed (the trigger only ever fires on a write, so a trace
+// already sitting in Firestore with no judgedAt and no new write coming
+// never gets picked up on its own), and a trigger invocation that failed
+// (its own try/catch logs the error and leaves judgedAt unset rather than
+// retrying, so that trace is also left for this script to pick up later).
+// Same grading call, same model rule, same everything; only the "how it
+// gets run" changed. Follows scripts/list-traces.mjs and
 // scripts/promote-trace.mjs's exact pattern: firebase-admin with Application
 // Default Credentials, the same --uid argument convention, a local batch job
 // Lucas runs by hand, same category as traces:list and traces:promote. Never
