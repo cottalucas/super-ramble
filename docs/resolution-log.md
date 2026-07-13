@@ -3,6 +3,78 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: Both open follow-ups closed: live reference-examples spot-check and a real traces:grade run
+
+Two gaps flagged open in the two entries directly below (the reference-
+examples deploy and the trace-grading PR) both closed today, in the same
+pass, once working credentials became available in this environment that
+were not available earlier the same day (`gcloud auth application-default
+print-access-token` now succeeds; it did not for several 2026-07-08 and
+2026-07-06 passes, a recurring gap noted repeatedly in this log).
+
+**Reference-examples live spot-check.** Rather than spend fresh credits on
+a synthetic probe, `npm run traces:list -- --uid <uid>` surfaced two real
+`structureTraces` documents dated today (`ynQakgn1DZnrS7ADSVn6`,
+`qXJbrzOHXZTvDqUv2yiN`), meaning Lucas had already exercised the deployed
+site for real after the merge. Read both in full. Both look right against
+the reference-examples-updated prompt: priority direction is correct
+throughout ("Call electric company," stated urgent with a this-week
+deadline, correctly priority 1; "Book the moving truck," stated urgent,
+correctly priority 1; unmarked routine tasks correctly default to 4);
+notably, "Buy renters insurance," described only as "important," landed at
+priority 2 in the first trace and 1 in the second, an improvement over the
+exact under-weighting the 2026-07-08 review flagged as questionable
+(priority 3 for the same "important" language, in the original Big Sur
+trace, left uncorrected in the promoted fixture because nobody had
+verified what the right number was). Sections are used well (Packing,
+Utilities, Moving Day, Old Place, matching the sections-when-they-help
+reference example's shape); the second trace correctly routes into the
+existing "Moving to New Apartment" project by id instead of resynthesizing
+one. This is not a controlled A/B test and does not, on its own, prove the
+reference-examples block caused the improvement rather than ordinary
+model variance; stated as encouraging real evidence, not a rigorous proof.
+
+**A real `traces:grade` run.** `ANTHROPIC_API_KEY` was read directly from
+the Firebase Functions secret (`firebase functions:secrets:access
+ANTHROPIC_API_KEY`) into the local shell for one command only, never
+written to a file or committed; this is the same real key the deployed
+Function itself uses, borrowed locally since this script cannot read a
+Function secret directly, exactly the gap `scripts/grade-traces.mjs`'s own
+comment already names. `npm run traces:grade -- --uid <uid>` graded all 12
+ungraded traces in one run, cost **$0.0211** total, nowhere near the
+`LLM_SPEND_CEILING_USD` ceiling. `npm run traces:list` afterward confirmed
+the merge write landed exactly as designed: `judgeCompleteness`,
+`judgeCorrectness`, `judgeNotes`, `judgedAt` all present, flagged traces
+marked plainly, `transcript`/`response` unchanged. 10 of 12 were flagged.
+Spot-checked one flag against a real manual read, not trusted blindly (the
+grader's own stated caveat): the grader flagged the original, un-promoted
+`wPWKIUs0mXfeeCGRYJXx` Big Sur trace's campsite-booking priority as
+"marked priority 4 when the transcript explicitly calls it urgent," which
+is exactly the real, already-documented priority-inversion bug from
+2026-07-08, correctly caught. The other 9 flags were not individually
+re-verified against a manual read in this pass; per the review cadence
+this grader is meant to feed, not per-flag proof.
+
+### Decisions not to relitigate
+
+- Both PR follow-ups (`functions/index.js`'s deploy, `scripts/grade-traces.mjs`'s
+  live path) are now verified working end to end, not just unit-tested.
+  Do not reopen either as "unverified"; a future regression needs its own
+  new finding, not a re-litigation of whether the mechanism itself works.
+- Borrowing the deployed Function's own `ANTHROPIC_API_KEY` secret into a
+  local shell via `firebase functions:secrets:access` is how
+  `scripts/grade-traces.mjs` is meant to be run locally, not a workaround;
+  the script's own comments already state this gap. Never write the key to
+  a file, `.env`, or a committed script; export it for one command and
+  unset it after, the same discipline this pass followed.
+- 10 of 12 real traces are currently flagged. This is not itself evidence
+  the Structure prompt regressed today; most flags concern nuanced
+  dependency/sequencing signals (a stated blocking relationship, a
+  "cannot forget" emphasis) that are genuinely debatable, not the clear-cut
+  inverted-direction class of bug the priority-direction fix targeted. A
+  future review pass should read these flags against the review cadence,
+  not treat "flagged" as "broken."
+
 ## 2026-07-13: Automatic trace grading, so nobody reads structureTraces blind
 
 A cheap, automatic quality check on every saved trace, closing a real gap:
