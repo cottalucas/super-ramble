@@ -285,6 +285,44 @@ function today() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
+// Shape-checks POST /api/structure/outcome's optional edits payload before
+// it ever reaches a Firestore write: { removedTasks: [{ content, priority,
+// sectionRef }], projectNameChange: { from, to } | null, contentEdits:
+// [{ originalContent, newContent }] }. Every field is optional (a client
+// omits whichever category had nothing to report), but whatever is present
+// must match this shape; this is the one client-writable field on
+// structureTraces, so it gets the same discipline STRUCTURE_JSON_SCHEMA
+// gives the model's own response. See docs/architecture.md.
+function isValidEdits(edits) {
+  if (edits == null || typeof edits !== 'object' || Array.isArray(edits)) return false;
+  const { removedTasks, projectNameChange, contentEdits } = edits;
+
+  if (removedTasks !== undefined) {
+    if (!Array.isArray(removedTasks)) return false;
+    for (const t of removedTasks) {
+      if (!t || typeof t !== 'object') return false;
+      if (typeof t.content !== 'string') return false;
+      if (!Number.isInteger(t.priority) || t.priority < 1 || t.priority > 4) return false;
+      if (t.sectionRef !== null && typeof t.sectionRef !== 'string') return false;
+    }
+  }
+
+  if (projectNameChange !== undefined && projectNameChange !== null) {
+    if (typeof projectNameChange !== 'object' || Array.isArray(projectNameChange)) return false;
+    if (typeof projectNameChange.from !== 'string' || typeof projectNameChange.to !== 'string') return false;
+  }
+
+  if (contentEdits !== undefined) {
+    if (!Array.isArray(contentEdits)) return false;
+    for (const e of contentEdits) {
+      if (!e || typeof e !== 'object') return false;
+      if (typeof e.originalContent !== 'string' || typeof e.newContent !== 'string') return false;
+    }
+  }
+
+  return true;
+}
+
 async function verifyAuth(req) {
   const header = req.headers.authorization || '';
   const match = header.match(/^Bearer (.+)$/);
@@ -604,20 +642,47 @@ exports.api = onRequest(
         return;
       }
 
-      // (a2) Record the user's own confirmed/cancelled decision on a trace
-      // the call above created. No model call, so it never touches
-      // DAILY_REQUEST_LIMIT, DAILY_COST_LIMIT_USD, or llmUsage. The path is
-      // built from the verified user.uid, never a client-supplied path, so a
-      // user can only ever touch their own trace.
+      // (a2) Record the user's own confirmed/cancelled/confirmed_with_edits
+      // decision on a trace the call above created. No model call, so it
+      // never touches DAILY_REQUEST_LIMIT, DAILY_COST_LIMIT_USD, or
+      // llmUsage. The path is built from the verified user.uid, never a
+      // client-supplied path, so a user can only ever touch their own
+      // trace. "confirmed_with_edits" is the third outcome state
+      // docs/llm-pipeline.md named and deliberately deferred until the
+      // preview itself became editable (SuperRambleModal.jsx): the
+      // original response persisted at request time is never touched here,
+      // only `edits` (what the user actually changed before Confirm) and
+      // the outcome/outcomeAt fields are written, same merge-write shape
+      // as a plain confirm or cancel.
       if (endsWithPath(req, '/structure/outcome') && req.method === 'POST') {
-        const { traceId, outcome } = req.body || {};
-        if (typeof traceId !== 'string' || !traceId || !['confirmed', 'cancelled'].includes(outcome)) {
-          res.status(400).json({ error: 'traceId and a valid outcome (confirmed or cancelled) are required' });
+        const { traceId, outcome, edits } = req.body || {};
+        const validOutcomes = ['confirmed', 'cancelled', 'confirmed_with_edits'];
+        if (typeof traceId !== 'string' || !traceId || !validOutcomes.includes(outcome)) {
+          res
+            .status(400)
+            .json({ error: 'traceId and a valid outcome (confirmed, cancelled, or confirmed_with_edits) are required' });
           return;
         }
-        await db
-          .doc(`users/${user.uid}/structureTraces/${traceId}`)
-          .set({ outcome, outcomeAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        if (outcome === 'confirmed_with_edits' && !edits) {
+          res.status(400).json({ error: 'edits is required when outcome is confirmed_with_edits' });
+          return;
+        }
+        if (edits !== undefined && edits !== null && !isValidEdits(edits)) {
+          res.status(400).json({ error: 'edits does not match the expected shape' });
+          return;
+        }
+        const update = { outcome, outcomeAt: admin.firestore.FieldValue.serverTimestamp() };
+        // Only ever written for confirmed_with_edits: a plain confirm or
+        // cancel stays exactly the two-field update it always was, even if
+        // a future client bug sent edits alongside one of those.
+        if (outcome === 'confirmed_with_edits') {
+          update.edits = {
+            removedTasks: edits.removedTasks || [],
+            projectNameChange: edits.projectNameChange ?? null,
+            contentEdits: edits.contentEdits || []
+          };
+        }
+        await db.doc(`users/${user.uid}/structureTraces/${traceId}`).set(update, { merge: true });
         res.json({ ok: true });
         return;
       }
