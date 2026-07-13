@@ -33,5 +33,12 @@ jobs:
       - name: Offline evals (no credits)
         run: npm run eval
 
+      # npm run eval already runs this (see above); a separate step keeps a
+      # sync regression visible as its own red X rather than buried inside
+      # the eval step's output. See docs/resolution-log.md, 2026-07-06, for
+      # why this hand-synced duplication needs its own guard.
+      - name: Prompt sync check
+        run: npm run check:prompt-sync
+
       - name: Function syntax check
         run: node --check functions/index.js

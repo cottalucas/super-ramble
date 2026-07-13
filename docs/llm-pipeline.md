@@ -169,6 +169,51 @@ it lands.
   Every other call in this app stays on Haiku. See the resolution log entry
   dated 2026-07-06 for the model id and the cost math behind the daily limits.
 
+### Reference examples
+
+The real Structure call sees more than written rules. `src/pipeline/referenceExamples.js`
+exports a small, curated array (four entries) of `{ transcript, response }`
+pairs, hand-picked from `evals/fixtures/` for real variety: a clean single
+project with nested sub-tasks, a real multi-section trip (the priority-
+corrected version of the camping-trip trace, not the raw buggy one), a
+restraint case that stays loose tasks instead of becoming a project, and a
+case where sections earn their keep. `formatReferenceExamples` turns that
+array into a labeled `PAST REFERENCE EXAMPLES` block, appended to
+`SYSTEM_PROMPT` below the written rules. The block states plainly that these
+are historical reference material, not the current user's transcript, so the
+model does not confuse them with live input; this matters for
+`isGroundedInTranscript` too (`src/pipeline/contracts.js`), which only ever
+checks a response's content against the real transcript argument passed to
+`structureTranscript`, never against this block.
+
+This is separate from `evals/fixtures/`, which still exists and still does
+its own job: fixtures run through the offline harness (`npm run eval`) with
+a mocked `callModel`, testing the pipeline's own plumbing (contract
+validation, grounding, the retry path), never a real model call. Reference
+examples exist to teach the live model; fixtures exist to test the code
+around it. A fixture can graduate into a reference example (as three of the
+four here did) but the two collections serve different purposes and neither
+substitutes for the other.
+
+To edit: swap or update an entry in `src/pipeline/referenceExamples.js`,
+then copy the identical change into `functions/referenceExamples.js`
+(Firebase Functions deploys only the `functions/` directory and cannot
+import `src/pipeline`, the same constraint `SYSTEM_PROMPT` itself already
+has, docs/resolution-log.md, 2026-07-06). `scripts/check-prompt-sync.mjs`
+diffs both `SYSTEM_PROMPT` strings and both `REFERENCE_EXAMPLES` arrays and
+fails loudly on drift; it runs in `npm run eval` and as its own `ci.yml`
+step, so an edit to only one copy fails CI instead of drifting silently
+until a live incident, the same failure mode that already shipped once with
+the priority-direction bug (docs/resolution-log.md, 2026-07-08).
+
+Offline evals cannot prove this changed real model behavior; they never call
+the real model, mocked or not. What CI actually verifies is that the
+formatting function produces non-empty, well-formed text, that the block is
+really appended to `SYSTEM_PROMPT`, and that both hand-synced copies match.
+Whether the live model structures better with these examples in context is a
+live-call question, spot-checked by hand (`EVAL_ALLOW_LIVE=true npm run
+eval:live` or a real `/api/structure` call), not asserted in CI.
+
 ## Stage 3: Write
 
 Runs only on explicit user confirm. Translates the validated response into a
