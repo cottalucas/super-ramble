@@ -3,6 +3,96 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: README.md brought back in line with the merged pipeline (accuracy pass, not a rewrite)
+
+`README.md` is the first thing anyone outside this project reads, and it
+makes specific, checkable claims. Two PRs merged earlier today
+(`docs/resolution-log.md`'s "Editable-preview and important-priority-fix
+PRs merged and deployed" entry and the two entries below it) changed real
+pipeline behavior that the README's own "Does this get smarter over time?"
+section did not yet describe, and the `npm run eval` command it documented
+had already drifted from `package.json`'s real chain. Fixed five specific
+gaps, nothing else in the file touched.
+
+1. **`npm run eval`'s description was wrong.** README said `eval:offline +
+   eval:date + eval:todoist`. The real chain in `package.json` is
+   `eval:offline && eval:date && eval:todoist && eval:write &&
+   check:prompt-sync`, has been since the editable-preview and reference-
+   examples passes. Fixed in the main prose eval command, the `<details>`
+   "Run the evals" section's own prose, and the CI section's parenthetical,
+   which named the same stale three-step list.
+2. **`src/pipeline/referenceExamples.js` explained.** Four hand-picked
+   worked examples injected into the live Structure prompt on every real
+   call, distinct from `evals/fixtures/*.json` (offline-only, a mocked
+   model, never reaches the real API). Stated plainly that this is the one
+   teaching mechanism that actually runs on every real call, and that a
+   person edits it by hand, the same as the prompt itself.
+3. **`scripts/grade-traces.mjs` explained.** An automatic first pass, one
+   cheap Haiku call per ungraded trace, hard-locked away from the real
+   Sonnet Structure call by design. Flags, never fixes, completeness and
+   priority/due defensibility. Cited real evidence it works, not just a
+   description: a real run against every ungraded trace on 2026-07-13
+   correctly re-caught the known priority-inversion bug in the original Big
+   Sur trace on its own (`docs/resolution-log.md`, commit `121934a`), and
+   stated plainly that its own verdicts still get spot-checked, not trusted
+   blindly.
+4. **`confirmed_with_edits` explained.** A user's own removal, content
+   edit, or project rename in the preview before confirming is captured as
+   a real, structured signal (`removedTasks`/`contentEdits`/
+   `projectNameChange`) alongside the trace, a fourth outcome value, not
+   just a confirm/cancel binary.
+5. **The eval-flywheel flowchart updated** to show the actual current loop:
+   reference examples shaping every call, a trace capturing any edits, the
+   automatic Haiku grader flagging before a person ever reads it, human
+   review, and promotion or a prompt/reference-example edit feeding back in.
+
+Language matched this repo's own existing style deliberately, not a new
+one invented for this pass: the "Two real caught bugs" section already in
+the README (untouched) was the reference, a concrete claim with a named
+file or resolution-log entry as evidence, and an explicit statement of what
+is *not* proven sitting next to what is. `docs/orchestration.md`'s
+stop-slop rule governs all of it: active voice, no filler, no em dashes, no
+hyphen used as a connector. Checked directly, not assumed: grepped the new
+text for an em dash character (none) and for a short list of marketing
+adjectives ("powerful," "seamless," "smart," "robust," "cutting-edge,"
+"state-of-the-art," "revolutionary," "game-changing," "effortless"); none
+present.
+
+**No deploy was needed, and none was run.** The task instruction this pass
+started from assumed a hosting redeploy would be needed for a README-only
+change; checked before running one, not assumed: `firebase.json`'s
+`"public": "dist"` means Firebase Hosting only ever serves the built
+`dist/` output, and nothing under `src/` imports or renders `README.md`'s
+content (`grep -rn "README" src/` found nothing). A `README.md`-only change
+cannot reach the deployed site at all; confirmed further by rebuilding and
+finding the exact same asset hashes (`index-Yu1caoV7.js`,
+`index-CQSkjeGZ.css`) already live from the prior deploy. Running
+`firebase deploy --only hosting` here would have been a real production
+action that changed nothing, so it was skipped; the actual "live" surface
+for this change is GitHub's own rendering of `README.md`, verified there
+directly after merge (see the PR).
+
+Verified: `npm run eval` 67/67 (18 fixtures/contract cases, 12 date, 26
+Todoist, 11 write) plus the prompt sync check, all passing, unaffected by a
+docs-only change but run anyway per the standard loop. `npm run build`
+clean, asset hashes unchanged from the already-live deploy, confirming
+nothing here reaches the client bundle. `node scripts/check-secrets.mjs`
+clean.
+
+### Decisions not to relitigate
+
+- A hosting or functions deploy is not automatic just because a task says
+  "this touches X, so deploy Y." Check whether the actual changed file
+  reaches what that deploy target serves before running it; `README.md`
+  and `docs/*.md` never do, since Firebase Hosting only serves `dist/` and
+  nothing in `src/` renders repo docs.
+- The "Two real caught bugs" section is the house style reference for any
+  future pipeline-explanation prose in this README: a concrete, checkable
+  claim, a named citation, and what is not proven stated as plainly as what
+  is. Do not add adjective-driven claims ("powerful," "smart," etc.)
+  anywhere in this file; if a sentence would read the same on a marketing
+  page, it needs a fact and a citation instead.
+
 ## 2026-07-13: Editable-preview and important-priority-fix PRs merged and deployed to super-ramble.web.app
 
 Follow-up to the two entries directly below (the editable Super Ramble
