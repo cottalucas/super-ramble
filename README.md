@@ -95,30 +95,74 @@ Classify and Structure are one combined call, not two.
 
 Precisely, and without overclaiming: **the model itself is never retrained.
 This is not fine-tuning.** What actually improves is a human-supervised loop
-where real failures become permanent regression tests, and inform edits to
-the prompt (`src/pipeline/prompt.js`) a person writes by hand.
+where real failures become permanent regression tests, inform edits to the
+prompt (`src/pipeline/prompt.js`) a person writes by hand, and occasionally
+become a new worked example added to that same prompt.
+
+Every real Structure call already sees more than written rules.
+`src/pipeline/referenceExamples.js` holds four hand-picked
+`{ transcript, response }` pairs, injected directly into the live system
+prompt on every real call: one clean project with nested sub-tasks, one
+real multi-section trip, one case that stays loose tasks on purpose (a
+restraint example, not just "always make a project"), one case where
+sections earn their keep. This is separate from `evals/fixtures/*.json`,
+which the offline suite reads with a mocked model and never reaches the
+real API; the reference examples are the one teaching mechanism that
+actually runs on every real call. A person edits this file by hand, the
+same way a person edits the prompt itself; the model never writes to it.
+`functions/referenceExamples.js` is a hand-synced copy for the same reason
+the prompt itself needs one, and `check:prompt-sync` (above) is what
+catches the two copies drifting.
 
 ```mermaid
 flowchart LR
-    A["Real Structure call"] --> B["Trace captured:<br/>transcript, response, cost, outcome"]
-    B --> C["Reviewed on a cadence,<br/>cancelled traces first"]
+    A["Real Structure call"]
+    RE["Reference examples<br/>shape every call"] -.-> A
+    A --> B["Trace captured:<br/>transcript, response, cost,<br/>outcome, any user edits"]
+    B --> G["Automatic Haiku grader<br/>flags completeness/correctness"]
+    G --> C["Human review,<br/>cancelled and edited traces first"]
     C --> D["Promoted into a new<br/>offline eval fixture"]
     D --> E["Regression suite grows,<br/>guards against repeat mistakes"]
-    C --> F["Prompt edits"]
+    C --> F["Prompt or reference-<br/>example edits"]
     F -.->|refines| A
 ```
 
 Every real Structure call persists a full trace to
-`users/{uid}/structureTraces`, including whether the user confirmed or
-cancelled the proposal. Traces are reviewed on a stated cadence, at least
-monthly or after every 10 new traces, whichever comes first, cancelled
-traces reviewed first since a rejected proposal is the highest-signal
-failure: the model got something wrong that mattered enough to reject
-outright, not just a detail worth an edit. A reviewed trace can be promoted
-into a new offline eval fixture (`scripts/promote-trace.mjs`), so the
-regression suite grows from real usage instead of staying a fixed,
-hand-written set. See [docs/llm-pipeline.md](docs/llm-pipeline.md)'s "Live
-capture and the eval flywheel" section for the full review cadence.
+`users/{uid}/structureTraces`: transcript, response, cost, and how the user
+actually responded to the proposal. That response is not only a plain
+confirm or a cancel. If the user removes a task, edits its content, or
+renames the project in the preview before confirming, that correction is
+captured too (`removedTasks`, `contentEdits`, `projectNameChange`), a
+fourth outcome, `confirmed_with_edits`, alongside plain `confirmed` and
+`cancelled`. A user's own correction becomes a real, structured signal into
+the same review loop, not something thrown away once the click lands.
+
+Before any of that reaches a person, `npm run traces:grade`
+(`scripts/grade-traces.mjs`) runs an automatic first pass: one cheap call
+per ungraded trace on this app's default Haiku model, hard-locked away
+from the real Structure call's Sonnet by design, so the grader can never be
+confused with, or billed against, the thing it grades. It flags, never
+fixes, two things: whether the response seems to be missing anything the
+transcript mentioned, and whether priorities or due dates look defensible
+given the transcript's own wording. It is not infallible, and its own
+verdicts get spot-checked against a real manual read on the same review
+cadence below, not trusted blindly. It has already proven itself once: a
+real run against every ungraded trace on 2026-07-13 correctly re-caught the
+same priority-inversion bug described below, in the original Big Sur trace,
+on its own, with no person pointing it there first
+(`docs/resolution-log.md`, commit `121934a`).
+
+Traces, now graded, are reviewed on a stated cadence, at least monthly or
+after every 10 new traces, whichever comes first; cancelled and
+confirmed-with-edits traces are reviewed first, tied for highest signal,
+since either means the model got something wrong that mattered, not just a
+detail nobody minded. A reviewed trace can be promoted into a new offline
+eval fixture (`scripts/promote-trace.mjs`), so the regression suite grows
+from real usage instead of staying a fixed, hand-written set. See
+[docs/llm-pipeline.md](docs/llm-pipeline.md)'s "Live capture and the eval
+flywheel" section for the full review cadence, and
+[docs/pipeline-learnings.md](docs/pipeline-learnings.md) for the running,
+dated log of what that review has actually found and fixed.
 
 Two real caught bugs are the evidence this loop actually works, not just a
 description of how it is supposed to:
@@ -201,7 +245,7 @@ store.
 ### Run the evals (the default no-credit check)
 
 ```bash
-npm run eval                 # eval:offline + eval:date + eval:todoist
+npm run eval                 # eval:offline + eval:date + eval:todoist + eval:write + check:prompt-sync
 ```
 
 Offline evals run the real structuring pipeline against synthetic fixtures
@@ -209,7 +253,13 @@ using mocked model responses. They never call the model and spend no
 credits. They assert the JSON contract end to end and write
 `evals/runs/latest.json`. `eval:date` and `eval:todoist` are deterministic,
 model-free checks (day-boundary logic, the Todoist priority-inversion and
-due-string mapping) with no fixtures of their own.
+due-string mapping) with no fixtures of their own. `eval:write` proves the
+Super Ramble preview's per-task removal, content edits, and project rename
+survive into `store.createProjectTree`'s output correctly, also with no
+model call. `check:prompt-sync` diffs `src/pipeline/prompt.js` and
+`src/pipeline/referenceExamples.js` against their hand-synced copies in
+`functions/`, which Firebase Functions cannot import directly, and fails
+loudly on drift.
 
 Live evals are gated and bounded, and need the dev server running:
 
@@ -270,8 +320,8 @@ never ship to production.
 ### CI
 
 On every push and pull request, `.github/workflows/ci.yml` runs `npm ci`,
-`npm run build`, `npm run eval` (the full offline/date/Todoist eval suite,
-no credits spent), and a syntax check on the Function. Green before
-anything else.
+`npm run build`, `npm run eval` (offline, date, Todoist, write, and the
+prompt sync check, no credits spent), and a syntax check on the Function.
+Green before anything else.
 
 </details>
