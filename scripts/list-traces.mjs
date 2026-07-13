@@ -75,6 +75,23 @@ async function main() {
     console.log(`  createdAt: ${createdAt}  ok: ${t.ok}  outcome: ${t.outcome}`);
     console.log(`  decision: ${t.response?.decision ?? '(none)'}  confidence: ${t.response?.confidence ?? '(none)'}`);
     console.log(`  transcript: ${truncate(t.transcript, 80)}`);
+    // scripts/grade-traces.mjs (npm run traces:grade) writes these onto a
+    // trace once graded. Absent on an ungraded trace, shown plainly, not as
+    // a blank line, so a listing immediately surfaces what's flagged. This
+    // grader only flags; it never edits src/pipeline/prompt.js or writes an
+    // eval fixture, and its own verdicts are not infallible, spot-check them
+    // against a real manual read (docs/llm-pipeline.md).
+    if ('judgedAt' in t) {
+      const judgedAt = t.judgedAt?.toDate ? t.judgedAt.toDate().toISOString() : String(t.judgedAt);
+      const flagged = t.judgeCompleteness === 'flag' || t.judgeCorrectness === 'flag';
+      const tag = flagged ? 'FLAGGED' : 'ok';
+      console.log(
+        `  judge: ${tag}  completeness: ${t.judgeCompleteness ?? '(none)'}  correctness: ${t.judgeCorrectness ?? '(none)'}  judgedAt: ${judgedAt}`
+      );
+      if (flagged && t.judgeNotes) console.log(`  judgeNotes: ${truncate(t.judgeNotes, 200)}`);
+    } else {
+      console.log('  judge: not graded yet (npm run traces:grade)');
+    }
     console.log('');
   }
 }

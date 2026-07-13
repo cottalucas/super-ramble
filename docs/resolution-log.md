@@ -3,6 +3,112 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: Automatic trace grading, so nobody reads structureTraces blind
+
+A cheap, automatic quality check on every saved trace, closing a real gap:
+`docs/llm-pipeline.md`'s review cadence asks a human to read every confirmed
+trace field by field, but nothing narrowed that reading before this pass,
+and the collection only grows.
+
+**What shipped.**
+
+- `scripts/grade-traces.mjs` (new): follows `scripts/list-traces.mjs` and
+  `scripts/promote-trace.mjs`'s exact existing pattern, Application Default
+  Credentials, the same `--uid` argument convention. Finds
+  `structureTraces` documents with no `judgedAt` field yet (Firestore has no
+  native "field missing" filter, so this is a full fetch plus a client-side
+  filter, the same shape `list-traces.mjs` already uses for a low-volume,
+  single-dogfooding-user collection) and, for each, makes one call on this
+  app's default Haiku model (`ANTHROPIC_MODEL`, never
+  `ANTHROPIC_STRUCTURE_MODEL`; the grader must never touch the same model or
+  cost tier as the real structuring call it is checking) via `output_config.
+  format` structured outputs, asking it to compare the trace's own
+  `transcript` against its own `response` and return two simple `"ok"`/
+  `"flag"` verdicts plus a one-line reason each: whether anything the
+  transcript mentioned seems missing from the response, and whether
+  priority or due dates look defensible given the transcript's own wording.
+  Writes `judgeCompleteness`, `judgeCorrectness`, `judgeNotes`, `judgedAt`
+  back as a merge write; `transcript` and `response` are never touched.
+  Bounded by `LLM_SPEND_CEILING_USD`, the exact convention
+  `scripts/trace-summary.mjs` already established, checked before each call
+  so a batch stops rather than overruns; `--limit` (default 20) separately
+  caps how many ungraded traces one run grades. Requires
+  `ANTHROPIC_API_KEY` in the local shell env, since this is a local script,
+  not the Function, and cannot read the Firebase Functions secret of the
+  same name; both missing `--uid` and a missing key fail fast with a clear
+  message, verified directly (not assumed) by running the script both ways.
+  Haiku 4.5 pricing used for the cost estimate ($1 / MTok in, $5 / MTok
+  out) verified live against
+  platform.claude.com/docs/en/about-claude/models/overview, the same
+  discipline `ANTHROPIC_STRUCTURE_MODEL`'s own pricing already followed
+  (2026-07-06 entry), not recalled from memory.
+- `package.json`: `"traces:grade": "node scripts/grade-traces.mjs"`, same
+  category as `traces:list` and `traces:promote`. `@anthropic-ai/sdk`
+  added as a root devDependency (`^0.110.0`, matching `functions/`'s own
+  pinned version) since this script calls Anthropic directly from a local
+  script, not through the Function; nothing under `src/` imports it, so the
+  client bundle is unaffected (confirmed by rebuilding and diffing asset
+  hashes, unchanged).
+- `scripts/list-traces.mjs`: shows the judge fields when present (`judge:
+  ok|FLAGGED`, `completeness`, `correctness`, `judgedAt`, and `judgeNotes`
+  when flagged), `judge: not graded yet` otherwise. Cancelled traces still
+  sort first; the judge display is additive to each trace's existing block,
+  the sort itself (`OUTCOME_ORDER`) untouched.
+- `docs/llm-pipeline.md`: new "Automatic grading" subsection under "Live
+  capture and the eval flywheel," right before "Review cadence." States
+  plainly that this grader only flags: it never edits
+  `src/pipeline/prompt.js` and never writes an eval fixture itself, both
+  stay a human decision, exactly as today. States explicitly that the
+  grader's own verdicts are not infallible and should get spot-checked
+  against a real manual read on the same review cadence, the same
+  "confirmed does not mean correct" lesson that already applied once to a
+  user's own Confirm click (the inverted-priority trace, 2026-07-08) before
+  this grader ever existed.
+
+**This never runs as part of a live user request.** It's a local batch job
+Lucas runs by hand, the same category as `traces:list` and
+`traces:promote`; nothing here touches `functions/` or `firestore.rules`,
+so this PR needs no deploy.
+
+Verified: `npm run eval` 17/17 offline, 12/12 date, 26/26 todoist, prompt
+sync check passing (unaffected by this PR, included only because it is the
+last step of `npm run eval`). `npm run build` clean, asset hashes unchanged
+from before this PR (confirming the new `@anthropic-ai/sdk` dependency and
+the new script never reach the client bundle). `node scripts/check-secrets.mjs`
+clean. `node --check` clean on both changed scripts. Argument validation
+(`--uid` required, `ANTHROPIC_API_KEY` required) verified by running the
+script both ways, not just read. The grading call itself was not run
+live in this environment: no working Application Default Credentials here
+(the same recurring gap several 2026-07-08 entries already noted), so there
+was no real `structureTraces` collection reachable to grade. A future pass
+with working credentials should run `npm run traces:grade -- --uid <uid>`
+against a real trace at least once and read the written `judgeCompleteness`/
+`judgeCorrectness`/`judgeNotes` back to confirm the merge write lands as
+intended; not proven here, stated plainly rather than assumed.
+
+### Decisions not to relitigate
+
+- The grader runs on this app's default Haiku model, never Sonnet, and
+  never on `ANTHROPIC_STRUCTURE_MODEL`. Do not "upgrade" the grader to a
+  stronger model to chase better verdicts; a cheap, cost-tier-separated
+  check is the whole point, matching the task's own explicit instruction.
+- `judgeCompleteness`/`judgeCorrectness`/`judgeNotes`/`judgedAt` are the
+  only fields this script ever writes, always as a merge write. Do not have
+  a future grading pass touch `transcript` or `response`, or replace the
+  merge write with a full document overwrite.
+- This grader flags; it does not fix. It must never call
+  `scripts/promote-trace.mjs` itself or edit `src/pipeline/prompt.js` or
+  `functions/index.js`. A flagged trace is a pointer for a human to look,
+  not an automatic action.
+- Its own verdicts are not ground truth. Do not cite "the grader said ok"
+  as equivalent to a real manual review in a future resolution-log entry;
+  the review cadence's manual read still stands, with the grader narrowing
+  what gets read first.
+- The grading call itself has not been run against real production traces
+  in this environment (no working ADC here). Do not treat this feature as
+  fully proven in production until a future pass with working credentials
+  confirms one real write lands correctly.
+
 ## 2026-07-13: Reference-examples PR merged and functions deployed to super-ramble.web.app
 
 Follow-up to the "Real reference examples wired into the live Structure

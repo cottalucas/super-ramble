@@ -304,6 +304,43 @@ trace schema, the promotion script, and this paragraph would all need to
 grow with it. That is a distinct, future decision, not something this pass
 approximates.
 
+### Automatic grading
+
+`npm run traces:grade -- --uid <uid>` (`scripts/grade-traces.mjs`) is a
+cheap, automatic first pass over ungraded traces, so nobody has to read a
+growing collection blind before the review cadence below even starts. It
+finds `structureTraces` documents with no `judgedAt` field yet and, for
+each, makes one call on this app's default Haiku model, never Sonnet: the
+grader must never touch the same model or cost tier as the real structuring
+call it is checking. The judge compares a trace's own `transcript` against
+its own `response` and returns two simple verdicts, `"ok"` or `"flag"`,
+each with a one-line reason: whether anything the transcript mentioned
+seems to be missing from the response, and whether priority or due dates
+look defensible given the transcript's own wording. It writes
+`judgeCompleteness`, `judgeCorrectness`, `judgeNotes`, and `judgedAt` back
+onto the trace as a merge write, `transcript` and `response` untouched.
+`npm run traces:list` shows the judge fields when present, flagged traces
+marked plainly, so a listing immediately surfaces what needs a look.
+Bounded by `LLM_SPEND_CEILING_USD`, the same local spend-ceiling convention
+`scripts/trace-summary.mjs` already uses, so a big batch run can't run away
+on cost by accident; `--limit` additionally caps how many ungraded traces
+one run grades.
+
+**This grader only flags. It never edits `src/pipeline/prompt.js` and never
+writes an eval fixture itself.** Whether a flagged (or unflagged) trace is
+worth a prompt change, or worth promoting into `evals/fixtures/*.json`
+(`npm run traces:promote`), stays a human decision, exactly as it is today;
+the grader narrows what a human has to read, it does not replace the
+reading. Its own judgment is not infallible either, and should not be
+trusted blindly: spot-check its verdicts against a real manual read on the
+same review cadence below, the same "confirmed does not mean correct"
+lesson that already applied once to a user's own Confirm click before this
+grader existed (a confirmed trace with an inverted priority on two tasks,
+`docs/resolution-log.md`, 2026-07-08). A grader that flags things wrong
+often enough, or misses things a manual read catches, is itself a finding
+worth a resolution-log entry, the same as any other failure mode this
+flywheel surfaces.
+
 ### Review cadence
 
 Review real traces at least monthly, or after every 10 new traces,
