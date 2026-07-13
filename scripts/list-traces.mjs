@@ -1,7 +1,10 @@
-// Lists the most recent structureTraces for one user, cancellations first,
-// since a rejected proposal is the highest-signal case to review: the model
-// got something wrong that mattered enough to reject the whole thing, not
-// just a detail worth an edit. Pending next, confirmed last. Reads via
+// Lists the most recent structureTraces for one user, cancellations and
+// confirmed-with-edits traces first (tied, most recent of the two first),
+// since either is a higher-signal case to review than a plain confirm: a
+// cancellation means the model got something wrong that mattered enough to
+// reject the whole thing, and an edited trace says exactly what was wrong,
+// not just that something was, since the user fixed it by hand instead of
+// walking away. Pending next, plain confirmed last. Reads via
 // firebase-admin, not the Function's own service-account path, so this only
 // ever runs locally, by a human reviewing real usage. See
 // docs/llm-pipeline.md.
@@ -34,7 +37,7 @@ if (!args.uid) {
 }
 const limit = Number(args.limit || 20);
 
-const OUTCOME_ORDER = { cancelled: 0, pending: 1, confirmed: 2 };
+const OUTCOME_ORDER = { cancelled: 0, confirmed_with_edits: 0, pending: 1, confirmed: 2 };
 
 function truncate(s, n) {
   if (!s) return '';
@@ -75,6 +78,31 @@ async function main() {
     console.log(`  createdAt: ${createdAt}  ok: ${t.ok}  outcome: ${t.outcome}`);
     console.log(`  decision: ${t.response?.decision ?? '(none)'}  confidence: ${t.response?.confidence ?? '(none)'}`);
     console.log(`  transcript: ${truncate(t.transcript, 80)}`);
+    // Only ever present when outcome is confirmed_with_edits
+    // (functions/index.js's isValidEdits/the outcome endpoint); says exactly
+    // what the user changed before Confirm, not just that something
+    // differed from the model's real response (still intact, untouched,
+    // right above as t.response). See docs/architecture.md's
+    // structureTraces field list.
+    if (t.outcome === 'confirmed_with_edits' && t.edits) {
+      const { removedTasks = [], projectNameChange = null, contentEdits = [] } = t.edits;
+      console.log(
+        `  edits: ${removedTasks.length} removed, ${contentEdits.length} content edit${contentEdits.length === 1 ? '' : 's'}${
+          projectNameChange ? ', project renamed' : ''
+        }`
+      );
+      for (const r of removedTasks) {
+        console.log(
+          `    removed: "${truncate(r.content, 60)}" (priority ${r.priority}${r.sectionRef ? `, section ${r.sectionRef}` : ''})`
+        );
+      }
+      if (projectNameChange) {
+        console.log(`    renamed project: "${projectNameChange.from}" -> "${projectNameChange.to}"`);
+      }
+      for (const e of contentEdits) {
+        console.log(`    edited: "${truncate(e.originalContent, 40)}" -> "${truncate(e.newContent, 40)}"`);
+      }
+    }
     // scripts/grade-traces.mjs (npm run traces:grade) writes these onto a
     // trace once graded. Absent on an ungraded trace, shown plainly, not as
     // a blank line, so a listing immediately surfaces what's flagged. This

@@ -3,6 +3,177 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: The Super Ramble preview is editable before Confirm, the "confirmed with edits" third state built
+
+Built the exact third outcome state `docs/llm-pipeline.md` had already named
+and deliberately deferred ("a future pass that lets a user adjust the tree
+before confirming... is a distinct, future decision, not approximated
+here"). Scoped narrowly, as asked: per-task removal, an editable project
+name, per-task content editing. Not priority, not due dates, not section
+removal; each stays its own bigger lift later.
+
+**What shipped.**
+
+- `src/components/TaskRow.jsx`: a new `editable` prop, the sibling of the
+  existing `readOnly` mode (not a new component, per the task's own
+  instruction; `TaskRow` already had the seam). The working tree had a
+  half-finished start on this at the top of this pass: the `editable`/
+  `onRemove`/`onContentChange` props and doc comments already existed, but
+  the actual render branches (checkbox, content, actions, and the recursive
+  call to sub-tasks) still only ever checked `readOnly`, so none of it
+  actually did anything yet. Finished it rather than trusted it: checkbox
+  and row-click now gate on `readOnly || editable` (a new `inert` local),
+  content renders an inline `<input>` when `editable`, and the actions area
+  swaps the real Add-sub-task/"..." block for a single plain "x" (`IconX`,
+  already existed) calling `onRemove(task)`, no confirm dialog, since
+  nothing is written until the real Confirm. All three new props thread
+  down through the existing sub-task recursion alongside `readOnly`.
+- `src/pipeline/write.js`: `updateTaskAtRef(tasks, ref, updater)` (new,
+  exported), the deliberate inverse of `flattenTasks`'s own ref scheme
+  (`t{i}`/`t{i}s{j}`), so the editable preview never needs a second,
+  hand-derived copy of that scheme. `updater(task) => task | null`; `null`
+  removes the task or sub-task the ref points to, its own sub-tasks going
+  with it since they live nested inside it in this shape, the same cascade
+  `store.deleteTask` gives a real task via its `parentId` walk, just via
+  different data. Pure: never mutates its input, verified directly (see
+  `scripts/eval-write.mjs` below). `toProjectTree` and `flattenTasks`
+  themselves needed **zero** changes: both already only ever read whatever
+  `tasks`/`project` they are handed, so passing an edited copy instead of
+  the original response at Confirm just works.
+- `src/components/SuperRambleModal.jsx`: `edited` (new state) is a deep
+  clone (`JSON.parse(JSON.stringify(...))`, sufficient since a Structure
+  response is plain JSON-shaped data with no functions or dates) of
+  `structured`, seeded the moment structuring succeeds and reset on
+  `backToEdit()`. Every edit (`removeTask`, `editTaskContent`,
+  `editProjectName`) mutates only `edited`, through `updateTaskAtRef`;
+  `structured` itself is never touched, so the trace's own persisted
+  `response` (written at request time, before any edit is even possible)
+  always reflects exactly what the model produced. `editLog` (new state,
+  `{ removedTasks, contentEdits }`) tracks edits incrementally, at the
+  moment each one happens, rather than by diffing `structured` against
+  `edited` at Confirm time: `flattenTasks`'s refs are positional, so they
+  shift the instant anything is removed, and a diff against the shifted
+  state can no longer tell "the task that used to be at `t2`" from
+  "whatever now happens to be at `t2`". `editProjectName` is the one
+  exception, diffed once at Confirm: there is exactly one project-name
+  field, so there is no positional-ref problem for a diff to trip over.
+  `TreePreview` now renders from `edited`, not `structured`; the project
+  name became an inline `<input>` (`.sr-project-name-input`, replacing the
+  old `<h3>`) bound to `edited.project.name`. The preview's own Cancel
+  button is renamed **Discard**, matching the task's reference screenshot;
+  behavior is unchanged, it still only calls `recordOutcome(..., 'cancelled')`
+  and closes, writing nothing. The input-state Cancel button (before
+  structuring even runs) is untouched, a different screen entirely.
+  `confirm()` now builds the tree from `edited`, computes `projectNameChange`
+  by diffing against `structured`, filters `contentEdits` down to edits that
+  actually changed a value (typed, then typed back, is not reported), and
+  sends `outcome: "confirmed_with_edits"` with the full `edits` object only
+  when at least one removal, real content edit, or rename survived to the
+  click; a plain confirm with nothing edited still sends exactly the
+  two-field POST it always has, verified directly, not assumed (see
+  Verification below).
+- `functions/index.js`: `POST /api/structure/outcome` accepts
+  `"confirmed_with_edits"` as a fourth valid `outcome` value alongside
+  `"confirmed"`/`"cancelled"`, plus an optional `edits` object, required
+  exactly when `outcome` is `"confirmed_with_edits"`. `isValidEdits` (new)
+  shape-checks it before it ever reaches Firestore, the same discipline
+  `STRUCTURE_JSON_SCHEMA` already gives the model's own response: this is
+  the one field on `structureTraces` a client actually writes content into,
+  not just an enum value, so it gets real validation, not a pass-through.
+  `edits` is only ever written to Firestore alongside `"confirmed_with_edits"`,
+  silently ignored for the other two outcomes even if a future client bug
+  sent it there, so a plain confirm or cancel stays exactly the two-field
+  update it always was.
+- `docs/architecture.md`: `structureTraces`' field list gains `outcome`'s
+  fourth value and the full `edits` shape, with the reasoning for why
+  `removedTasks` records a task's state at the moment of removal (possibly
+  already content-edited) rather than its original state.
+  `docs/llm-pipeline.md`'s "Live capture and the eval flywheel" section
+  describes the editable preview itself and the new outcome state,
+  replacing the paragraph that used to defer it; "Eval assertions per
+  stage" (Write) gained a line for the new coverage below.
+- `scripts/list-traces.mjs`: `OUTCOME_ORDER` now ties `cancelled` and
+  `confirmed_with_edits` at the front (both `0`), per the task's own
+  framing: an edited trace is at least as high-signal as a cancelled one,
+  since it says exactly what was wrong, not just that something was. A new
+  block prints the edits summary when `outcome === 'confirmed_with_edits'`:
+  counts, each removed task (content, priority, section), any project
+  rename, each content edit (original -> new).
+- `scripts/eval-write.mjs` (new, wired into `npm run eval` as `eval:write`,
+  the same "its own script, no fixtures, no model" shape
+  `scripts/eval-date.mjs`/`eval-todoist.mjs` already use): 11 cases against
+  `src/pipeline/write.js` directly. Proves, not just states, the task's own
+  explicit ask: a removed root task's content, and its own sub-tasks', are
+  absent from `toProjectTree`'s output; removing one sub-task leaves its
+  parent and sibling; `updateTaskAtRef` never mutates the array it is
+  given; a content edit replaces exactly the targeted task or sub-task; a
+  project rename reaches the produced tree; routing into an existing
+  project (`targetProjectId` set) ignores `project.name` entirely, edited
+  or not; and a combined removal-plus-edit-plus-rename case together.
+
+**Verification, beyond the offline suite.** Started the dev server with
+`VITE_ENABLE_LOCAL_PREVIEW=true` in `.env.local` (gitignored, reverted to
+`false` before any deploy, `npm run verify:prod-env` run directly afterward
+to confirm) and mocked `window.fetch` for `/api/structure` in the browser
+console, the same technique the 2026-07-06 entry used to check
+`SuperRambleModal.jsx` without spending real credits. Confirmed live in the
+browser, not just read from the diff: the project name field is genuinely
+editable (typed a new name, it stuck); a task's content is genuinely
+editable inline; clicking a sub-task's "x" removes only that sub-task, its
+section's count updates; clicking a parent task's "x" removes it and its
+remaining sub-task together, and the section itself (now empty) disappears
+from the preview, matching the existing "skip a section with zero
+remaining tasks" rule already there for read-only preview, section removal
+itself out of scope; Confirm writes a project under the new name with only
+the two remaining tasks, one showing the edited content, confirmed by
+opening the created project directly; `window.__lastOutcomeBody` after that
+Confirm was exactly
+`{ traceId, outcome: "confirmed_with_edits", edits: { removedTasks: [...], projectNameChange: {...}, contentEdits: [...] } }`,
+every field matching what was actually done in the UI; a second run with no
+edits at all confirmed the outcome POST stays the plain, unchanged
+`{ traceId, outcome: "confirmed" }`, no `edits` key. No console errors
+across either run.
+
+Verified: `npm run eval` 66/66 offline across five scripts (17 fixtures/
+contract cases, 12 date, 26 Todoist, 11 write, unchanged counts on every
+existing script) plus the prompt sync check, all passing. `npm run build`
+clean. `node scripts/check-secrets.mjs` clean. `node --check functions/index.js`
+clean.
+
+### Decisions not to relitigate
+
+- `TaskRow`'s `editable` mode is additive to `readOnly`, not a replacement:
+  both exist side by side, `SuperRambleModal.jsx` is the only caller of
+  either. A future not-yet-written surface that wants a fully inert row
+  still has `readOnly`; one that wants an adjustable-before-write row uses
+  `editable`.
+- `updateTaskAtRef` is the one place that understands `flattenTasks`'s ref
+  scheme well enough to reverse it. A future editable-preview feature
+  (priority, dates, sections) should extend this function's `updater`
+  contract, not hand-roll a second ref parser.
+- `structured` (the model's real, untouched output) is never mutated by any
+  edit. Do not "simplify" this later by editing it in place; the trace's
+  own persisted `response` and the edits summary both depend on it staying
+  exactly what the model produced.
+- `removedTasks` entries record a task's state at the moment of removal
+  (its current, possibly already-edited content; its real priority and
+  section), not its original state from `structured`. This was a
+  deliberate choice, not an oversight: it is what a reviewer actually saw
+  and rejected.
+- `edits` is written to Firestore only alongside `outcome ===
+  "confirmed_with_edits"`, never alongside `"confirmed"` or `"cancelled"`,
+  even if a client sends it. Do not loosen this; a plain confirm's trace
+  should never carry a stray, unused `edits` field.
+- `scripts/promote-trace.mjs` was not touched this pass. A
+  `confirmed_with_edits` trace still needs `--expected-file` to promote
+  (its `outcome` is not `"confirmed"`, so `--use-live-response` still
+  refuses it), the same treatment a cancelled trace already gets, correct
+  as-is: by definition, something about the model's real response wasn't
+  quite right if a human edited it. A future pass could teach
+  `promote-trace.mjs` to apply a confirmed_with_edits trace's own `edits`
+  automatically when building the fixture; not built here, not assumed to
+  be a small change.
+
 ## 2026-07-13: Both open follow-ups closed: live reference-examples spot-check and a real traces:grade run
 
 Two gaps flagged open in the two entries directly below (the reference-

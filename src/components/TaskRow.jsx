@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { priorityClass } from './PriorityPicker.jsx';
-import { IconCheck, IconCaret, IconPlus, IconHash, IconDots } from './Icons.jsx';
+import { IconCheck, IconCaret, IconPlus, IconHash, IconDots, IconX } from './Icons.jsx';
 import Popover from './Popover.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import { dueMeta, isOverdue } from '../lib/date.js';
@@ -45,8 +45,16 @@ import { colorHex } from '../lib/colors.js';
 // content is not clickable, and the Add-sub-task/"..." actions are hidden
 // entirely rather than left clickable-but-dead, since a dead button is
 // exactly what docs/design-system.md's anti-pattern checklist forbids.
-// Recurses down to every nested sub-task automatically. See
-// SuperRambleModal.jsx for the one caller.
+// Recurses down to every nested sub-task automatically.
+//
+// `editable` (default false) is the newer, less-inert sibling of `readOnly`,
+// for a preview a user can still adjust before Confirm: the checkbox stays
+// disabled and the row stays unclickable (same as readOnly, nothing here is
+// a real task yet), but the content becomes an inline text input
+// (`onContentChange(task, newContent)`) and a plain "x" replaces the
+// Add-sub-task/"..." actions (`onRemove(task)`, no confirm dialog, since
+// nothing is written until the real Confirm). See SuperRambleModal.jsx,
+// the only caller of either mode.
 export default function TaskRow({
   task,
   depth = 0,
@@ -68,7 +76,10 @@ export default function TaskRow({
   onDropRow,
   onDragEndRow,
   onDragLeaveRow,
-  readOnly = false
+  readOnly = false,
+  editable = false,
+  onRemove,
+  onContentChange
 }) {
   const kids = childrenOf.get(task.id) || [];
   const [expanded, setExpanded] = useState(true);
@@ -78,6 +89,7 @@ export default function TaskRow({
   const depthCls = depth === 1 ? 'sub' : depth >= 2 ? 'sub2' : '';
   const meta = dueMeta(task.due);
   const overdue = isOverdue(task.due);
+  const inert = readOnly || editable;
   // Drawn as box-shadow/background states on the row itself, not a
   // mounted/unmounted sibling element: inserting or removing a DOM node as
   // dragPreview changes shifts every row below it by that node's height,
@@ -120,18 +132,28 @@ export default function TaskRow({
           type="button"
           className={`checkbox ${priorityClass(task.priority)}`}
           aria-label="Complete task"
-          onClick={readOnly ? undefined : () => onComplete(task)}
-          disabled={readOnly}
+          onClick={inert ? undefined : () => onComplete(task)}
+          disabled={inert}
         >
           <IconCheck className="check" />
         </button>
 
         <div
           className="task-main"
-          onClick={readOnly ? undefined : () => onOpen(task)}
-          style={{ cursor: readOnly ? 'default' : 'pointer' }}
+          onClick={inert ? undefined : () => onOpen(task)}
+          style={{ cursor: inert ? 'default' : 'pointer' }}
         >
-          <div className="task-content">{task.content}</div>
+          {editable ? (
+            <input
+              type="text"
+              className="task-content-input"
+              value={task.content}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => onContentChange(task, e.target.value)}
+            />
+          ) : (
+            <div className="task-content">{task.content}</div>
+          )}
           {task.description ? <div className="task-desc">{task.description}</div> : null}
 
           {(meta || (task.labels && task.labels.length) || showProject) && (
@@ -166,7 +188,13 @@ export default function TaskRow({
           ) : null}
         </div>
 
-        {readOnly ? null : (
+        {readOnly ? null : editable ? (
+          <div className="task-row-actions">
+            <button type="button" className="icon-btn" title="Remove" onClick={() => onRemove(task)}>
+              <IconX width={14} height={14} className="icon" />
+            </button>
+          </div>
+        ) : (
           <div className="task-row-actions">
             <button type="button" className="icon-btn" title="Add sub-task" onClick={() => onAddSub(task)}>
               <IconPlus width={15} height={15} className="icon" />
@@ -235,6 +263,9 @@ export default function TaskRow({
               onDropRow={onDropRow}
               onDragEndRow={onDragEndRow}
               readOnly={readOnly}
+              editable={editable}
+              onRemove={onRemove}
+              onContentChange={onContentChange}
             />
           ))
         : null}
