@@ -45,16 +45,24 @@ too.
   strings byte for byte and the two `REFERENCE_EXAMPLES` arrays
   structurally, plus a sanity check that `formatReferenceExamples` produces
   non-empty text and that `SYSTEM_PROMPT` actually contains it (catches
-  "defined but never appended," not just array drift). Requires
-  `functions/index.js` via `createRequire` to read its export; verified
-  live in this environment that requiring it has no problematic side
-  effects (`admin.initializeApp()` and `defineSecret()` are both lazy, no
-  credentials needed to load the module, the same assumption
-  `scripts/list-traces.mjs`/`promote-trace.mjs` already lean on for the
-  Admin SDK). Verified the check actually fails on real drift, not just the
-  happy path: temporarily edited one copy only, confirmed both failure
-  messages fired with exit code 1, restored, reran clean. Wired into
-  `npm run eval` (new `check:prompt-sync` script, last step) and as its own
+  "defined but never appended," not just array drift). First version
+  `require`d `functions/index.js` directly to read its exported
+  `STRUCTURE_SYSTEM_PROMPT`; passed locally (where `functions/node_modules`
+  already existed from an earlier install) but failed in CI with
+  `Cannot find module 'firebase-functions/v2/https'`, since the root
+  `npm ci` this eval step runs under never installs `functions/`'s own
+  dependencies. Fixed by extracting `STRUCTURE_SYSTEM_PROMPT_RULES`'s array
+  literal directly from `functions/index.js`'s source text (a balanced-
+  bracket scan, evaluated in isolation) instead of requiring the whole
+  module, so the check has zero dependency on `functions/node_modules`
+  existing; verified by moving `functions/node_modules` aside entirely and
+  rerunning the check clean. `functions/referenceExamples.js` has no
+  external dependencies of its own (plain data plus one pure function), so
+  it is still `require`d directly, that part was never the problem.
+  Verified the check actually fails on real drift, not just the happy path:
+  temporarily edited one copy only, confirmed both failure messages fired
+  with exit code 1, restored, reran clean. Wired into `npm run eval` (new
+  `check:prompt-sync` script, last step) and as its own
   `ci.yml` step ("Prompt sync check") so a drift regression shows as its
   own red X, not buried inside the eval step's output. This is the guard
   against a fourth silent drift of this exact hand-synced duplication; the

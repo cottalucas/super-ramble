@@ -12,15 +12,23 @@
 // future edit to one copy and not the other fails CI immediately instead of
 // silently drifting until the next live incident.
 //
-// No network calls, no credentials required. Requiring functions/index.js
-// has no side effects beyond registering the Cloud Function definition and
-// admin.initializeApp() (lazy, does not require real credentials to load);
-// verified safe to require from a local script the same way
-// scripts/list-traces.mjs and scripts/promote-trace.mjs already rely on the
-// Admin SDK loading without a live call.
-//
-// Run: node scripts/check-prompt-sync.mjs (wired into npm run eval and ci.yml)
+// functions/index.js requires firebase-admin, firebase-functions, and
+// @anthropic-ai/sdk, installed only under functions/node_modules by its own
+// `npm ci --prefix functions`, a step CI does not run (the root `npm ci`
+// this eval step runs under never touches it; a first version of this script
+// required functions/index.js directly and failed in CI with
+// "Cannot find module 'firebase-functions/v2/https'" for exactly this
+// reason, working only by accident locally where functions/node_modules
+// happened to already exist). To avoid depending on functions/ having its
+// own dependencies installed, the STRUCTURE_SYSTEM_PROMPT_RULES array is
+// extracted directly from functions/index.js's source text (a plain
+// string-array literal, parsed with a balanced-bracket scan, then evaluated
+// in isolation) instead of requiring the module. functions/referenceExamples.js
+// has zero external dependencies (plain data plus one pure function), so it
+// is required directly; that one is genuinely safe regardless of whether
+// functions/node_modules exists.
 
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -30,8 +38,42 @@ import { REFERENCE_EXAMPLES as SRC_EXAMPLES, formatReferenceExamples as srcForma
 const require = createRequire(import.meta.url);
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-const functionsIndex = require(join(root, 'functions', 'index.js'));
-const { REFERENCE_EXAMPLES: FN_EXAMPLES } = require(join(root, 'functions', 'referenceExamples.js'));
+/** Extract a top-level `const <name> = [ ... ];` array literal's source text and eval it in isolation. */
+function extractArrayLiteral(source, constName, sourceLabel) {
+  const marker = `const ${constName} = [`;
+  const start = source.indexOf(marker);
+  if (start === -1) {
+    throw new Error(`Could not find "${marker}" in ${sourceLabel}`);
+  }
+  const openBracket = start + marker.length - 1;
+  let depth = 0;
+  let end = -1;
+  for (let i = openBracket; i < source.length; i++) {
+    if (source[i] === '[') depth++;
+    else if (source[i] === ']') {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end === -1) {
+    throw new Error(`Could not find the closing bracket for ${constName} in ${sourceLabel}`);
+  }
+  const literalText = source.slice(openBracket, end + 1);
+  // eslint-disable-next-line no-new-func
+  return new Function(`return (${literalText});`)();
+}
+
+const functionsIndexSource = readFileSync(join(root, 'functions', 'index.js'), 'utf8');
+const fnRules = extractArrayLiteral(functionsIndexSource, 'STRUCTURE_SYSTEM_PROMPT_RULES', 'functions/index.js');
+
+const { REFERENCE_EXAMPLES: FN_EXAMPLES, formatReferenceExamples: fnFormat } = require(
+  join(root, 'functions', 'referenceExamples.js')
+);
+
+const fnSystemPrompt = [fnRules.join('\n'), '', fnFormat(FN_EXAMPLES)].join('\n');
 
 const failures = [];
 
@@ -54,7 +96,7 @@ if (typeof formatted !== 'string' || !formatted.trim()) {
 }
 
 // The two SYSTEM_PROMPT strings, byte for byte.
-if (SYSTEM_PROMPT !== functionsIndex.STRUCTURE_SYSTEM_PROMPT) {
+if (SYSTEM_PROMPT !== fnSystemPrompt) {
   failures.push(
     "SYSTEM_PROMPT drift: src/pipeline/prompt.js's SYSTEM_PROMPT does not match functions/index.js's STRUCTURE_SYSTEM_PROMPT."
   );
