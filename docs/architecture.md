@@ -161,8 +161,28 @@ entry.
   `llmUsage` before the trace write was attempted, so it isn't lost, just not
   duplicated onto a marker that isn't a real trace)
 - `createdAt`: server timestamp
-- `outcome`: `"pending" | "confirmed" | "cancelled"`
+- `outcome`: `"pending" | "confirmed" | "cancelled" | "confirmed_with_edits"`
 - `outcomeAt`: server timestamp | null
+- `edits`: `{ removedTasks: { content: string, priority: number, sectionRef: string | null }[], projectNameChange: { from: string, to: string } | null, contentEdits: { originalContent: string, newContent: string }[] } | undefined`
+  (present only when `outcome` is `"confirmed_with_edits"`, absent on every
+  other outcome, never `null`). `response` above is always the model's real,
+  untouched output; `edits` is the separate record of what the user actually
+  changed in `SuperRambleModal.jsx`'s preview before Confirm (per-task
+  removal, an inline project-name edit, per-task content edits, the one
+  editable slice of the preview this pass built; priority, dates, and
+  section membership are not editable there yet). The two together mean the
+  original proposal and the human correction on top of it are both on the
+  trace, not just the corrected result: `removedTasks` carries what a
+  removed task looked like at the moment it was removed (its current
+  content if it had already been edited, its real priority and section),
+  `contentEdits` carries only edits that actually changed a value, an edit
+  typed back to its original content is not reported. Written once, at
+  Confirm, by the same `POST /api/structure/outcome` call every outcome
+  already used; shape-checked by `isValidEdits` (`functions/index.js`)
+  before ever reaching Firestore, since this is the one field on this
+  collection a client actually writes content into, not just an enum
+  value. See `docs/llm-pipeline.md`'s "Live capture and the eval flywheel"
+  section and the resolution log's editable-preview entry.
 - `traceWriteFailed`: boolean, present and `true` only on a fallback marker
   (see below); absent on every normal trace document
 - `errorCode`, `errorMessage`: string | null, present only alongside
@@ -181,10 +201,11 @@ matching `structureTraces` document at all, since the prior version of this
 write's catch block only logged to Cloud Logging and returned `null`. See
 the resolution log entry dated 2026-07-08 for the finding and the fallback
 this added. `outcome` and `outcomeAt` are filled in later by
-`POST /api/structure/outcome` when the user confirms or cancels the
-proposal (a `traceWriteFailed` marker never gets a real outcome, since there
-was never a proposal shown for it either: the original request still
-returned its normal response or error to the caller). Denied to every client
+`POST /api/structure/outcome` when the user confirms, confirms with edits,
+or cancels the proposal (a `traceWriteFailed` marker never gets a real
+outcome, since there was never a proposal shown for it either: the original
+request still returned its normal response or error to the caller). Denied
+to every client
 read and write in `firestore.rules`; only the Function (Admin SDK) and the
 local `scripts/list-traces.mjs` / `scripts/promote-trace.mjs` (also Admin
 SDK, which bypasses rules) ever touch it. `list-traces.mjs` shows a

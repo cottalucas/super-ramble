@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useData } from '../AppData.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { structureTranscript, ContractError } from '../pipeline/structure.js';
-import { toProjectTree, flattenTasks, toDue } from '../pipeline/write.js';
+import { toProjectTree, flattenTasks, toDue, updateTaskAtRef } from '../pipeline/write.js';
 import { getAuthToken } from '../lib/authToken.js';
 import { createTodoistClient } from '../todoist/index.js';
 import TaskRow, { buildChildrenMap } from './TaskRow.jsx';
@@ -14,11 +14,19 @@ import VoiceRecorder from './VoiceRecorder.jsx';
 // against a tree that has no ids yet and has not been written. TaskRow is the
 // actual per-row renderer underneath it, and it already recurses through a
 // childrenOf map keyed by parentId, so the smallest real adaptation was
-// giving TaskRow a readOnly prop (see TaskRow.jsx) and building a throwaway
+// giving TaskRow an editable prop (see TaskRow.jsx) and building a throwaway
 // childrenOf map keyed by local refs instead of real ids. Same row rendering,
 // same due/priority/indent rules, no parallel renderer.
-function TreePreview({ structured }) {
-  const flat = flattenTasks(structured);
+//
+// `editedStructured` is the in-memory working copy (SuperRambleModal's
+// `edited` state), never the original response: this always renders what
+// Confirm would actually write. `onRemove`/`onContentChange` receive back
+// exactly the row object TaskRow was given, whose `id` is one of
+// flattenTasks's own refs (`t{i}`/`t{i}s{j}`), so the caller can hand it
+// straight to `updateTaskAtRef` without this component needing to know
+// anything about that scheme itself.
+function TreePreview({ editedStructured, onRemove, onContentChange }) {
+  const flat = flattenTasks(editedStructured);
   const rows = flat.map((t, i) => ({
     id: t.ref,
     parentId: t.parentRef || null,
@@ -32,7 +40,7 @@ function TreePreview({ structured }) {
   }));
   const childrenOf = buildChildrenMap(rows);
   const roots = rows.filter((t) => !t.parentId);
-  const sections = structured.sections || [];
+  const sections = editedStructured.sections || [];
   const noSectionRoots = roots.filter((t) => !t.sectionId);
 
   if (!roots.length) {
@@ -53,13 +61,29 @@ function TreePreview({ structured }) {
               </div>
             </div>
             {secRoots.map((t) => (
-              <TaskRow key={t.id} task={t} depth={0} childrenOf={childrenOf} readOnly />
+              <TaskRow
+                key={t.id}
+                task={t}
+                depth={0}
+                childrenOf={childrenOf}
+                editable
+                onRemove={onRemove}
+                onContentChange={onContentChange}
+              />
             ))}
           </div>
         );
       })}
       {noSectionRoots.map((t) => (
-        <TaskRow key={t.id} task={t} depth={0} childrenOf={childrenOf} readOnly />
+        <TaskRow
+          key={t.id}
+          task={t}
+          depth={0}
+          childrenOf={childrenOf}
+          editable
+          onRemove={onRemove}
+          onContentChange={onContentChange}
+        />
       ))}
     </div>
   );
@@ -101,6 +125,19 @@ export default function SuperRambleModal({ onClose }) {
   const [text, setText] = useState('');
   const [state, setState] = useState('input'); // input | recording | loading | preview | error
   const [structured, setStructured] = useState(null);
+  // `edited` is the working copy the preview actually renders and Confirm
+  // actually writes: a deep clone of `structured`, seeded once per proposal,
+  // mutated only through removeTask/editTaskContent/editProjectName below.
+  // `structured` itself is never touched, so the trace's own persisted
+  // response always reflects exactly what the model produced, edits or not.
+  // `editLog` tracks removals and content edits as they happen, not by
+  // diffing at Confirm time: flattenTasks's refs (`t{i}`/`t{i}s{j}`) are
+  // positional, so they shift as soon as anything is removed, and a diff
+  // against the shifted state could no longer tell "the task that used to
+  // be at t2" from "whatever now happens to be at t2". Capturing at the
+  // moment of each action sidesteps that entirely.
+  const [edited, setEdited] = useState(null);
+  const [editLog, setEditLog] = useState({ removedTasks: [], contentEdits: [] });
   const [errorMsg, setErrorMsg] = useState('');
   const [confirming, setConfirming] = useState(false);
   // Always defaults off, on every fresh proposal: this is a second real
@@ -166,11 +203,14 @@ export default function SuperRambleModal({ onClose }) {
     return body.structured;
   }
 
-  // Best-effort telemetry: records the user's own confirmed/cancelled
-  // decision on the trace the proposal came from. Never awaited at its call
-  // site and never surfaces an error; a failed outcome POST must not block
-  // or interrupt the write (confirm) or the close (cancel).
-  function recordOutcome(id, outcome) {
+  // Best-effort telemetry: records the user's own confirmed/cancelled/
+  // confirmed_with_edits decision on the trace the proposal came from.
+  // `edits` is only ever sent alongside "confirmed_with_edits", never
+  // "confirmed" or "cancelled": a plain confirm with no edits stays exactly
+  // the two-field POST it always was. Never awaited at its call site and
+  // never surfaces an error; a failed outcome POST must not block or
+  // interrupt the write (confirm) or the close (cancel).
+  function recordOutcome(id, outcome, edits) {
     if (!id) return;
     (async () => {
       try {
@@ -181,7 +221,7 @@ export default function SuperRambleModal({ onClose }) {
             'content-type': 'application/json',
             ...(token ? { authorization: `Bearer ${token}` } : {})
           },
-          body: JSON.stringify({ traceId: id, outcome })
+          body: JSON.stringify({ traceId: id, outcome, ...(edits ? { edits } : {}) })
         });
       } catch {
         // Telemetry only. Silently swallowed on purpose.
@@ -198,6 +238,12 @@ export default function SuperRambleModal({ onClose }) {
       const existingProjects = projects.filter((p) => !p.isInbox).map((p) => ({ id: p.id, name: p.name }));
       const result = await structureTranscript({ transcript, existingProjects, callModel });
       setStructured(result);
+      // Deep clone, not a reference: edits below must never touch `result`
+      // itself, since that is exactly what gets persisted to the trace.
+      // JSON.parse(JSON.stringify(...)) is sufficient here, the response is
+      // already plain JSON-shaped data with no functions or dates in it.
+      setEdited(JSON.parse(JSON.stringify(result)));
+      setEditLog({ removedTasks: [], contentEdits: [] });
       setTraceId(traceIdRef.current);
       setState('preview');
     } catch (err) {
@@ -213,7 +259,46 @@ export default function SuperRambleModal({ onClose }) {
   function backToEdit() {
     setState('input');
     setStructured(null);
+    setEdited(null);
+    setEditLog({ removedTasks: [], contentEdits: [] });
     setErrorMsg('');
+  }
+
+  // Removing a task removes its own sub-tasks too: they live nested inside
+  // it in this shape (structured.tasks[].subtasks[]), so updateTaskAtRef's
+  // splice already takes them with it, the same cascade store.deleteTask
+  // gives a real task via its parentId walk, just via a different data
+  // shape. Any pending content edit on the removed ref is dropped from the
+  // log too, since there is no task left for it to describe.
+  function removeTask(task) {
+    setEdited((prev) => ({ ...prev, tasks: updateTaskAtRef(prev.tasks, task.id, () => null) }));
+    setEditLog((log) => ({
+      removedTasks: [...log.removedTasks, { content: task.content, priority: task.priority, sectionRef: task.sectionId ?? null }],
+      contentEdits: log.contentEdits.filter((e) => e.ref !== task.id)
+    }));
+  }
+
+  // `task.content` here is always the value before this keystroke: React
+  // hasn't applied the state update this onChange triggers yet, so the
+  // first edit on a given ref genuinely captures the untouched original.
+  // Every edit after that only updates newContent, originalContent stays
+  // whatever the first edit saw.
+  function editTaskContent(task, newContent) {
+    setEdited((prev) => ({
+      ...prev,
+      tasks: updateTaskAtRef(prev.tasks, task.id, (t) => ({ ...t, content: newContent }))
+    }));
+    setEditLog((log) => {
+      const existing = log.contentEdits.find((e) => e.ref === task.id);
+      if (existing) {
+        return { ...log, contentEdits: log.contentEdits.map((e) => (e.ref === task.id ? { ...e, newContent } : e)) };
+      }
+      return { ...log, contentEdits: [...log.contentEdits, { ref: task.id, originalContent: task.content, newContent }] };
+    });
+  }
+
+  function editProjectName(newName) {
+    setEdited((prev) => ({ ...prev, project: { ...prev.project, name: newName } }));
   }
 
   // The Todoist push is a second, independent write, not sync: it runs
@@ -221,10 +306,18 @@ export default function SuperRambleModal({ onClose }) {
   // failure never rolls back or blocks the local write that already
   // landed. If the local write itself fails, nothing is attempted against
   // Todoist at all, the same fail-closed order the rest of this app follows.
+  //
+  // Builds from `edited`, never `structured`: anything removed is simply
+  // absent from `edited.tasks` (toProjectTree needs no changes of its own
+  // to honor that, it already only ever reads whatever tasks/project it is
+  // given), so a removed task never reaches the local write or a Todoist
+  // push. `structured` (the model's real, untouched output) is what already
+  // got persisted to the trace at request time; this only ever affects what
+  // gets written now and what the outcome POST below reports about it.
   async function confirm() {
-    if (!structured || confirming) return;
+    if (!edited || confirming) return;
     setConfirming(true);
-    const tree = toProjectTree(structured, { inboxId });
+    const tree = toProjectTree(edited, { inboxId });
     try {
       await store.createProjectTree(tree);
     } catch {
@@ -243,8 +336,31 @@ export default function SuperRambleModal({ onClose }) {
     }
 
     await bump();
-    recordOutcome(traceId, 'confirmed');
     const isNewProject = structured.decision === 'project' && !structured.targetProjectId;
+    // Diffed once, here, rather than tracked incrementally like removals and
+    // content edits: there is exactly one project-name field, so there is no
+    // positional-ref problem for a diff to trip over.
+    const projectNameChange =
+      isNewProject && edited.project?.name !== structured.project?.name
+        ? { from: structured.project.name, to: edited.project.name }
+        : null;
+    // Edits that ended up back at their original value (typed, then typed
+    // back) are not worth reporting as a real edit; filtered before hasEdits
+    // is computed, not after, so that case alone does not flip the outcome
+    // to confirmed_with_edits with an otherwise-empty edits object.
+    const contentEdits = editLog.contentEdits
+      .filter((e) => e.originalContent !== e.newContent)
+      .map(({ originalContent, newContent }) => ({ originalContent, newContent }));
+    const hasEdits = editLog.removedTasks.length > 0 || contentEdits.length > 0 || Boolean(projectNameChange);
+    if (hasEdits) {
+      recordOutcome(traceId, 'confirmed_with_edits', {
+        removedTasks: editLog.removedTasks,
+        projectNameChange,
+        contentEdits
+      });
+    } else {
+      recordOutcome(traceId, 'confirmed');
+    }
     if (todoistError) {
       flash(`Saved. Todoist push failed: ${todoistError}`);
     } else {
@@ -361,8 +477,16 @@ export default function SuperRambleModal({ onClose }) {
                   <div className="modal-body sr-body sr-preview-body">
                     <p className="sr-reasoning">{structured.reasoning}</p>
                     <p className="sr-confidence">Confidence {Math.round(structured.confidence * 100)}%</p>
-                    {isNewProject ? <h3 className="sr-project-name">{structured.project.name}</h3> : null}
-                    <TreePreview structured={structured} />
+                    {isNewProject ? (
+                      <input
+                        type="text"
+                        className="sr-project-name-input"
+                        aria-label="Project name"
+                        value={edited.project.name}
+                        onChange={(e) => editProjectName(e.target.value)}
+                      />
+                    ) : null}
+                    <TreePreview editedStructured={edited} onRemove={removeTask} onContentChange={editTaskContent} />
                   </div>
                   <div className="modal-footer">
                     {showTodoistToggle ? (
@@ -384,7 +508,7 @@ export default function SuperRambleModal({ onClose }) {
                           onClose();
                         }}
                       >
-                        Cancel
+                        Discard
                       </button>
                       <button type="button" className="btn btn-primary" disabled={confirming} onClick={confirm}>
                         {confirming ? 'Adding...' : 'Confirm'}

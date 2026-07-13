@@ -260,6 +260,10 @@ Structure (the combined decision-and-tree call):
 Write:
 - The produced batch matches the `createProjectTree` contract.
 - Refuses any tree the schema rejects.
+- A task removed in the editable preview is actually absent from
+  `toProjectTree`'s output, its own sub-tasks absent with it; a renamed
+  project and edited task content both carry through unchanged. See
+  `scripts/eval-write.mjs` and "Live capture and the eval flywheel" below.
 
 Guard suite:
 - Empty input, oversized input, and a dump that is plainly flat must not produce
@@ -279,30 +283,51 @@ entry dated 2026-07-06.
 ## Live capture and the eval flywheel
 
 Every real Structure call persists to `users/{uid}/structureTraces`
-(`docs/architecture.md`), including the user's own confirmed or cancelled
-decision: `POST /api/structure/outcome` records it right when Confirm or
-Cancel is clicked in the preview. `npm run traces:list -- --uid <uid>`
-reviews the most recent traces, cancellations first, since a proposal the
-user rejected outright is the highest-signal case, the model got something
-wrong that mattered, not just a detail worth an edit. `npm run traces:promote`
-turns a reviewed trace into a new offline fixture, shaped exactly like
-`evals/fixtures/*.json`. A confirmed trace promotes as-is
-(`--use-live-response`): a person already looked at that exact tree and
-accepted it. A cancelled trace needs a hand-written correction
-(`--expected-file`): what the model produced there is precisely what nobody
-wanted, so it cannot become an auto-trusted regression fixture. Every
-promoted fixture still has to pass `validateStructure` and the grounding
-guard before it can be written; promoting a trace is not a way around the
-contract, only a source of real cases for it.
+(`docs/architecture.md`), including the user's own confirmed, confirmed-
+with-edits, or cancelled decision: `POST /api/structure/outcome` records it
+right when Confirm or Discard is clicked in the preview. `npm run
+traces:list -- --uid <uid>` reviews the most recent traces, cancellations
+and edited traces first (see below), since either is a higher-signal case
+than a plain confirm: the model got something wrong that mattered, not just
+a detail nobody noticed. `npm run traces:promote` turns a reviewed trace
+into a new offline fixture, shaped exactly like `evals/fixtures/*.json`. A
+plain confirmed trace promotes as-is (`--use-live-response`): a person
+already looked at that exact tree and accepted it, unedited. A cancelled
+trace, or a confirmed-with-edits trace, needs a hand-written correction
+(`--expected-file`) instead: what the model produced there is, by
+definition, not quite what was wanted, whether rejected outright or fixed
+by hand, so neither can become an auto-trusted regression fixture as-is.
+Every promoted fixture still has to pass `validateStructure` and the
+grounding guard before it can be written; promoting a trace is not a way
+around the contract, only a source of real cases for it.
 
-The preview a user reviews is read-only end to end (`TaskRow`'s `readOnly`
-prop, `SuperRambleModal.jsx`); there is no way to edit the proposed tree
-before confirming. That makes the outcome exactly two states, confirmed or
-cancelled, not three. A future pass that lets a user adjust the tree before
-confirming would add "confirmed with edits" as a real third state, and the
-trace schema, the promotion script, and this paragraph would all need to
-grow with it. That is a distinct, future decision, not something this pass
-approximates.
+**The preview is editable before Confirm, as of this pass.**
+`SuperRambleModal.jsx` seeds an in-memory working copy of the validated
+response (`TaskRow`'s `editable` prop, the sibling of the older, still-used
+`readOnly` mode) the moment structuring succeeds, and every edit mutates
+only that copy: per-task removal (a sub-task's own children go with it,
+since they live nested inside it), an inline project-name edit, and
+per-task content edits. Priority, due dates, and section membership are not
+editable in the preview yet, each its own bigger lift; removing a section
+itself is not supported either, only the tasks inside one. `src/pipeline/
+write.js`'s `toProjectTree` needed no changes to honor this: it already
+only ever reads whatever `tasks`/`project` it is handed, so passing the
+edited copy instead of the original response at Confirm just works,
+verified directly (a removed task's content is asserted absent from the
+produced tree, not assumed; see "Eval assertions per stage" above).
+`structured` (the model's real, untouched output) is never mutated and is
+exactly what got persisted to the trace at request time already; editing
+the preview only changes what Confirm actually writes and what the outcome
+POST below reports about it.
+
+That makes the outcome three real states now, not two:
+`"confirmed_with_edits"` (`docs/architecture.md`'s `structureTraces` field
+list has the full `edits` shape) sits alongside `"confirmed"` and
+`"cancelled"`, sent whenever at least one removal, a real content edit (one
+that actually changed a value; typing something back to its original
+content is not reported), or a project-rename survived to the Confirm
+click. A plain confirm with no edits still sends exactly the two-field POST
+it always has; `edits` is never sent for `"confirmed"` or `"cancelled"`.
 
 ### Automatic grading
 

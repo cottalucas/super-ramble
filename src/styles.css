@@ -1642,9 +1642,34 @@ textarea:focus {
   margin-top: 10px;
 }
 
-.sr-project-name {
+.sr-project-name-input {
+  display: block;
+  width: 100%;
   margin: 0 0 10px;
+  padding: 2px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ds-ink);
   font-size: 16px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+/* Editable preview (SuperRambleModal): a task's content becomes an inline
+   text input in place of the plain .task-content div, borderless like
+   .sr-project-name-input above, same size/weight as the row's own text so
+   swapping in the input does not shift the row's layout. */
+.task-content-input {
+  display: block;
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ds-ink);
+  font-size: 14px;
+  font-family: inherit;
+  padding: 0;
 }
 
 /* The Todoist push toggle, new-project preview only. Sits left of the
