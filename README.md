@@ -94,37 +94,38 @@ Classify and Structure are one combined call, not two.
 ### Does this get smarter over time?
 
 Precisely, and without overclaiming: **the model itself is never retrained.
-This is not fine-tuning.** What actually improves is a human-supervised loop
-where real failures become permanent regression tests, inform edits to the
-prompt (`src/pipeline/prompt.js`) a person writes by hand, and occasionally
-become a new worked example added to that same prompt.
+This is not fine-tuning, and a user's own action never moves anything on
+its own either.** What actually improves is a supervised loop, most of it
+automatic now, all of it bounded by the same rule: something only ever
+joins the live prompt on its own when two independent signals agree, a
+user's own correction and an automatic grader's independent read. Anything
+short of that, a rejected proposal, a plain confirm the grader still
+flagged, a correction the system could not safely reconstruct, waits for a
+person, on a monthly cadence.
 
 Every real Structure call already sees more than written rules.
-`src/pipeline/referenceExamples.js` holds four hand-picked
-`{ transcript, response }` pairs, injected directly into the live system
-prompt on every real call: one clean project with nested sub-tasks, one
-real multi-section trip, one case that stays loose tasks on purpose (a
-restraint example, not just "always make a project"), one case where
-sections earn their keep. This is separate from `evals/fixtures/*.json`,
-which the offline suite reads with a mocked model and never reaches the
-real API; the reference examples are the one teaching mechanism that
-actually runs on every real call. A person edits this file by hand, the
-same way a person edits the prompt itself; the model never writes to it.
-`functions/referenceExamples.js` is a hand-synced copy for the same reason
-the prompt itself needs one, and `check:prompt-sync` (above) is what
-catches the two copies drifting.
+`referenceExamples`, a Firestore collection, holds `{ transcript, response }`
+pairs fetched fresh on every real call, capped at 30: a clean single
+project with nested sub-tasks, a real multi-section trip, a restraint case
+that stays loose tasks on purpose, a case where sections earn their keep,
+the four originals this pool started from, permanent, never auto-deleted.
+This is separate from `evals/fixtures/*.json`, which the offline suite
+reads with a mocked model and never reaches the real API, and separate
+from the written rules themselves (`src/pipeline/prompt.js`, a person
+still edits those by hand); the reference-example pool is the one part of
+the live prompt that can grow on its own, from real usage, between deploys.
 
 ```mermaid
 flowchart LR
-    A["Real Structure call"]
-    RE["Reference examples<br/>shape every call"] -.-> A
-    A --> B["Trace captured:<br/>transcript, response, cost,<br/>outcome, any user edits"]
+    A["Voice or text in<br/>Structure: Claude Sonnet"]
+    RE["referenceExamples pool<br/>(Firestore)"] -.-> A
+    RULES["Written rules"] -.-> A
+    A --> B["Trace + outcome saved<br/>(structureTraces)"]
     B --> G["Automatic Haiku grader<br/>flags completeness/correctness"]
-    G --> C["Human review,<br/>cancelled and edited traces first"]
-    C --> D["Promoted into a new<br/>offline eval fixture"]
-    D --> E["Regression suite grows,<br/>guards against repeat mistakes"]
-    C --> F["Prompt or reference-<br/>example edits"]
-    F -.->|refines| A
+    G --> AGREE{"User correction AND<br/>grader flag agree?"}
+    AGREE -->|Yes| PROMOTE["Auto-added to<br/>referenceExamples"]
+    AGREE -->|No| QUEUE["Queued in pipelineLearningLog<br/>for the monthly human check"]
+    PROMOTE -.->|refines| A
 ```
 
 Every real Structure call persists a full trace to
@@ -134,35 +135,47 @@ confirm or a cancel. If the user removes a task, edits its content, or
 renames the project in the preview before confirming, that correction is
 captured too (`removedTasks`, `contentEdits`, `projectNameChange`), a
 fourth outcome, `confirmed_with_edits`, alongside plain `confirmed` and
-`cancelled`. A user's own correction becomes a real, structured signal into
-the same review loop, not something thrown away once the click lands.
+`cancelled`.
 
-Before any of that reaches a person, `npm run traces:grade`
-(`scripts/grade-traces.mjs`) runs an automatic first pass: one cheap call
-per ungraded trace on this app's default Haiku model, hard-locked away
-from the real Structure call's Sonnet by design, so the grader can never be
-confused with, or billed against, the thing it grades. It flags, never
-fixes, two things: whether the response seems to be missing anything the
-transcript mentioned, and whether priorities or due dates look defensible
-given the transcript's own wording. It is not infallible, and its own
-verdicts get spot-checked against a real manual read on the same review
-cadence below, not trusted blindly. It has already proven itself once: a
-real run against every ungraded trace on 2026-07-13 correctly re-caught the
-same priority-inversion bug described below, in the original Big Sur trace,
-on its own, with no person pointing it there first
-(`docs/resolution-log.md`, commit `121934a`).
+Grading is automatic, not a command someone has to remember to run. The
+moment a trace's outcome is written, a Firestore trigger
+(`gradeStructureTrace`, `functions/index.js`) grades it on this app's
+default Haiku model, hard-locked away from the real Structure call's
+Sonnet by design, so the grader can never be confused with, or billed
+against, the thing it grades. It flags, never fixes, two things: whether
+the response seems to be missing anything the transcript mentioned, and
+whether priorities or due dates look defensible given the transcript's own
+wording. It is not infallible, and its own verdicts get spot-checked
+against a real manual read on the same monthly cadence below, not trusted
+blindly. It has already proven itself once: a real run against every
+ungraded trace on 2026-07-13 correctly re-caught the same priority-
+inversion bug described below, in the original Big Sur trace, on its own,
+with no person pointing it there first (`docs/resolution-log.md`, commit
+`121934a`).
 
-Traces, now graded, are reviewed on a stated cadence, at least monthly or
-after every 10 new traces, whichever comes first; cancelled and
-confirmed-with-edits traces are reviewed first, tied for highest signal,
-since either means the model got something wrong that mattered, not just a
-detail nobody minded. A reviewed trace can be promoted into a new offline
-eval fixture (`scripts/promote-trace.mjs`), so the regression suite grows
-from real usage instead of staying a fixed, hand-written set. See
-[docs/llm-pipeline.md](docs/llm-pipeline.md)'s "Live capture and the eval
-flywheel" section for the full review cadence, and
+**The auto-promote rule, stated plainly:** when a trace is
+`confirmed_with_edits` (a real user correction exists) *and* the grader
+flags that same trace's original response (an independent signal agrees
+something was wrong), the trigger reconstructs the corrected tree the
+edits describe and, if that reconstruction and a contract check both
+succeed, writes it into `referenceExamples` automatically, the pool capped
+at 30 documents, the oldest non-seed one pruned first past that. That is
+the entire bar for "automatic": two signals, not one. A cancelled trace, a
+plain confirm the grader still flagged, or a correction the system could
+not safely reconstruct (a real, documented limitation, see
+[docs/llm-pipeline.md](docs/llm-pipeline.md)) all land in
+`pipelineLearningLog` instead, `kind: "flagged"`, waiting for
+`npm run review-queue`'s monthly pass, the same human-in-the-loop review
+this app has always required, just narrower now: a person reads what the
+automatic pass could not resolve, not a raw, ungraded collection.
+`npm run sync-learnings` is the one step that turns a resolved log entry
+into an actual line in [docs/pipeline-learnings.md](docs/pipeline-learnings.md);
+nothing writes to that file directly.
+
+See [docs/llm-pipeline.md](docs/llm-pipeline.md)'s "Live capture and the
+eval flywheel" section for the full mechanism, and
 [docs/pipeline-learnings.md](docs/pipeline-learnings.md) for the running,
-dated log of what that review has actually found and fixed.
+dated log of what it has actually found.
 
 Two real caught bugs are the evidence this loop actually works, not just a
 description of how it is supposed to:
@@ -227,20 +240,38 @@ structure. Nothing ever writes without the user's own explicit confirm.
   history of what was done and the decisions a future pass should not
   relitigate.
 
+### Key files
+
+The JavaScript that actually runs the pipeline, one line each:
+
+- `functions/index.js`, the `/api` Function: the real Sonnet Structure
+  call, the Firestore-read prompt assembly (written rules plus the current
+  `referenceExamples` pool), and `gradeStructureTrace`, the grading and
+  auto-promotion trigger.
+- `src/pipeline/structure.js`, client-side orchestration: one corrective
+  retry, fails closed on a second failure, no partial or guessed structure.
+- `src/pipeline/contracts.js`, the validator: the no-invention (grounding)
+  guard and every cross-field coherence check a JSON Schema cannot express.
+- `src/pipeline/write.js`, the pure function that turns a confirmed
+  structure into what `store.createProjectTree` actually writes.
+- `src/components/SuperRambleModal.jsx`, the editable preview: per-task
+  removal, inline content edits, an editable project name, all before the
+  one real write on Confirm.
+- `functions/contracts.js`, the hand-synced copy of `src/pipeline/contracts.js`
+  the auto-promotion trigger needs (`functions/` cannot import `src/pipeline`
+  directly).
+- `scripts/grade-traces.mjs`, the manual grading backfill for traces that
+  predate the trigger.
+- `scripts/review-queue.mjs`, the monthly human review of what the
+  automatic pass could not resolve on its own.
+- `scripts/sync-learnings.mjs`, the one step that mirrors a resolved
+  finding into `docs/pipeline-learnings.md`.
+- `scripts/promote-trace.mjs`, promoting a reviewed trace into a new
+  offline eval fixture, the manual path `scripts/review-queue.mjs`'s own
+  promotion also reuses for validation.
+
 <details>
 <summary>For developers</summary>
-
-### Run locally
-
-```bash
-npm install
-cp .env.example .env.local   # fill in the Firebase web config values
-npm run dev                  # serves on http://localhost:5173
-```
-
-Set `VITE_ENABLE_LOCAL_PREVIEW=true` in `.env.local` to see the app without
-real Firebase Auth, signed in as a local preview user against a localStorage
-store.
 
 ### Run the evals (the default no-credit check)
 
@@ -257,9 +288,11 @@ due-string mapping) with no fixtures of their own. `eval:write` proves the
 Super Ramble preview's per-task removal, content edits, and project rename
 survive into `store.createProjectTree`'s output correctly, also with no
 model call. `check:prompt-sync` diffs `src/pipeline/prompt.js` and
-`src/pipeline/referenceExamples.js` against their hand-synced copies in
-`functions/`, which Firebase Functions cannot import directly, and fails
-loudly on drift.
+`src/pipeline/contracts.js` against their hand-synced copies in
+`functions/` (`functions/` cannot import `src/pipeline` directly, Firebase
+Functions deploys only that one directory) and fails loudly on drift; none
+of this touches Firestore either, so the whole `npm run eval` chain still
+spends nothing and needs no network access.
 
 Live evals are gated and bounded, and need the dev server running:
 

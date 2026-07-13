@@ -3,6 +3,244 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: Reference examples moved to Firestore; grading and a bounded auto-promotion path made automatic
+
+A real architecture change, not a docs pass: `referenceExamples` moved out
+of source files (`src/pipeline/referenceExamples.js`,
+`functions/referenceExamples.js`) into a Firestore collection, grading
+moved from a manually-run script to a Firestore trigger, and a bounded
+auto-promotion path now writes a corrected trace into the live example pool
+automatically when two independent signals agree: the user's own
+`confirmed_with_edits` correction, and the automatic grader independently
+flagging the same trace's original response.
+
+**What shipped.**
+
+- `referenceExamples/{id}` (new, top-level Firestore collection,
+  `docs/architecture.md`): `transcript`, `response`, `source` (`"seed" |
+  "auto-promoted" | "manual"`), `addedAt`, `promotedFromTraceId`, `notes`.
+  `scripts/seed-reference-examples.mjs` copied the four original hand-
+  picked examples in with `source: "seed"`, confirmed live (4 documents,
+  read back and spot-checked field by field, not just trusted from the
+  write call's own success), before `src/pipeline/referenceExamples.js`
+  and `functions/referenceExamples.js` were deleted. The seed data now
+  lives as a literal array inside the seed script itself, not imported
+  from the files it just deleted, so the script stays genuinely re-runnable
+  as a disaster-recovery tool rather than becoming dead code that throws
+  on a missing import the moment anyone ran it a second time.
+- `functions/index.js`'s `/api/structure` handler fetches the current
+  `referenceExamples` pool at request time (`addedAt` descending, capped
+  at 30) instead of reading a value frozen at build time, formats it into
+  the same labeled block a file-based version produced, and appends it to
+  `STRUCTURE_SYSTEM_PROMPT_RULES`. A Firestore read failure here degrades
+  to written-rules-only rather than a 500; this is the exact prompt shape
+  the app ran before reference examples existed at all, not a failure
+  mode. `src/pipeline/prompt.js`'s `SYSTEM_PROMPT` goes back to being just
+  the written rules, no Firestore dependency, no reference-example
+  assembly of its own; it never had a live caller besides
+  `scripts/check-prompt-sync.mjs` to begin with.
+- `functions/contracts.js` (new): a hand-synced copy of
+  `src/pipeline/contracts.js` (`validateStructure`, `allContents`,
+  `isGroundedInTranscript`, `ungroundedContents`), needed because the
+  auto-promotion trigger has to validate a reconstructed tree before
+  writing it, and `functions/` cannot import `src/pipeline` any more than
+  it ever could. This is a real, deliberate fourth instance of this app's
+  "kept in sync by hand" pattern (after `STRUCTURE_SYSTEM_PROMPT_RULES`,
+  and the now-retired `referenceExamples.js` pair), guarded the same way:
+  `scripts/check-prompt-sync.mjs` now also diffs this pair, behaviorally
+  (a shared set of probe cases run against both copies, since a validator
+  is code, not a string `SYSTEM_PROMPT`-style byte comparison can check).
+  **Caught a real gap in the check script itself while writing it**: an
+  initial probe set used only a wildly-out-of-range priority (9) to test
+  the range check, and a deliberately-introduced `p <= 5` drift (instead
+  of `p <= 4`) passed silently, since 9 fails either boundary. Added a
+  probe case for the boundary value itself (priority 5), verified it then
+  caught that exact drift, restored, reran clean. The lesson generalizes:
+  a probe case for "clearly wrong" is not the same as a probe case for
+  "wrong by exactly the amount a boundary typo would produce."
+- `functions/index.js` exports `gradeStructureTrace`, a new
+  `onDocumentWritten` Firestore trigger on
+  `users/{uid}/structureTraces/{traceId}`. Grades on this app's default
+  Haiku model (mirrors `scripts/grade-traces.mjs`'s exact call, a third
+  hand-synced copy of that same grading logic, accepted for the same
+  reason the other two are), guarded against retriggering itself: it
+  checks `judgedAt` is not already set before doing anything, so its own
+  merge write produces one harmless extra invocation that immediately
+  no-ops, never a loop. Verified this guard is the actual mechanism by
+  unit-testing the reconstruction logic and reasoning through the event
+  sequence directly against the installed `firebase-functions` library's
+  own source (`Change.fromObjects(before, after)`), not assumed from
+  memory of how Firestore triggers generally work.
+- Auto-promotion, same trigger, right after grading, only when `outcome
+  === "confirmed_with_edits"` and the grader flags the original response:
+  `reconstructCorrectedTree(response, edits)` replays the persisted diff
+  (`removedTasks`, `contentEdits`, `projectNameChange`) onto a clone of the
+  model's real, untouched response, since the trace schema only ever
+  persists what changed, not a second full corrected tree.
+  **Content edits are always reliable** (`originalContent` is captured
+  client-side before any change, so it always matches the pristine
+  response). **Removals are not always reliable, and this is a real,
+  documented limitation, not an oversight**: `SuperRambleModal.jsx`'s own
+  `removeTask` drops any pending `contentEdits` entry for a task once it
+  is removed, so the "edited, then removed" sequence leaves
+  `removedTasks[].content` holding text that was never written back into
+  `response` by a matching edit either; there is no way to recover what
+  that task's original content was from the persisted trace alone. When
+  reconstruction cannot locate every `removedTasks` entry, it reports the
+  miss rather than guessing, and auto-promotion is skipped for that trace,
+  the same fail-closed posture the rest of this pipeline already takes.
+  Verified directly with three unit cases (a clean rename+edit+removal, a
+  root-task removal cascading its own sub-tasks, and the edited-then-
+  removed case producing exactly the expected warning), not assumed from
+  reading the code. A routing trace (`response.targetProjectId` set) is
+  also skipped outright, even with two agreeing signals: a reference
+  example has to stay generic and reusable, never tied to one real
+  historical Firestore id, the same reason all four original seed
+  examples already had `targetProjectId: null`, not by accident.
+- `pipelineLearningLog/{id}` (new, top-level collection): one entry per
+  trace the grader flagged that did not (or could not) auto-promote,
+  `kind: "auto-promoted" | "flagged"`, `resolved`, plus `uid` and
+  `mirrored`, both **added beyond this task's own literal field list**,
+  for reasons that are functional necessities, not scope creep: without
+  `uid`, nothing reading this top-level collection could find the trace
+  back under its owning `users/{uid}/structureTraces` subcollection to
+  review or promote it; without `mirrored`,
+  `scripts/sync-learnings.mjs` would have no way to know which entries it
+  has already written into `docs/pipeline-learnings.md`, so every run
+  would re-append everything. **A plain "ok" on both grader signals writes
+  nothing here at all**: read narrowly, not literally ("write one entry...
+  either way"), since logging a trace nothing flagged would contradict
+  this collection's own stated purpose (a real finding, not a general
+  notes file) and would flood `scripts/review-queue.mjs` with noise the
+  grader was supposed to filter out in the first place.
+- `scripts/review-queue.mjs` (new): lists unresolved `kind: "flagged"`
+  entries, oldest first. `--resolve <logId>` marks it looked at; `--resolve
+  <logId> --promote` (with `--use-live-response` or a hand-corrected
+  `--expected-file`, `scripts/promote-trace.mjs`'s own two-path convention
+  reused rather than re-invented) promotes a trace by hand into
+  `referenceExamples`, `source: "manual"`, the third `source` value this
+  collection needed beyond its original two-value design, running the
+  same validation the automatic path does plus the same `targetProjectId`
+  guard, and enforcing the same 30-document cap (extended slightly beyond
+  the trigger's own "prune oldest auto-promoted" rule to "prune oldest
+  non-seed," since a manual promotion is not "auto-promoted" but still not
+  a permanent seed either).
+- `scripts/sync-learnings.mjs` (new): mirrors every eligible
+  `pipelineLearningLog` entry (an auto-promotion needs no further human
+  decision; a flagged entry becomes eligible only once
+  `scripts/review-queue.mjs` marks it resolved) into
+  `docs/pipeline-learnings.md` as a short, dated section, distinct in tone
+  from a hand-written finding like the "important vs urgent" entry: these
+  are mechanical log mirrors, clearly marked as such, not narrative prose
+  a person wrote. `docs/pipeline-learnings.md`'s own "How to add an entry"
+  recipe rewritten to describe the new starting point
+  (`npm run review-queue`, not a raw trace list) and this new step.
+- `firestore.indexes.json` (new, and `firebase.json` updated to reference
+  it): `scripts/review-queue.mjs`'s own listing query (`kind ==
+  "flagged"`, `resolved == false`, ordered by `date`) needs a composite
+  index Firestore does not create automatically for two equality filters
+  plus an orderBy on a third field. **Found live, not assumed**: running
+  the script against the real (then-empty) collection threw
+  `FAILED_PRECONDITION: The query requires an index` with the exact
+  console link to create it; this is the first query in this app that has
+  ever needed one, everything before it was either a single-field
+  `orderBy` (auto-indexed) or a full-collection client-side filter (the
+  established low-volume-collection convention `scripts/grade-traces.mjs`
+  and `scripts/list-traces.mjs` already use). `firestore.indexes.json`
+  defines it; deploying it is part of this pass's own close-out, not
+  deferred.
+- `firestore.rules`: `referenceExamples/{exampleId}` and
+  `pipelineLearningLog/{logId}` both denied to every client read and
+  write, the same `structureTraces`/`todoistAuth` treatment, for the same
+  reason: only the Function (Admin SDK) and local scripts touch either
+  collection, and both are global, not scoped under a single
+  `users/{uid}`, since a reference example teaches the live model for
+  every future call regardless of whose transcript prompted it.
+- `scripts/grade-traces.mjs` unchanged in what it does, header rewritten:
+  now a manual backfill for traces that predate the trigger, or a trigger
+  invocation that itself failed (its own `try`/`catch` leaves `judgedAt`
+  unset rather than retrying).
+- `docs/architecture.md`, `docs/llm-pipeline.md` (the "Reference examples,"
+  "Automatic grading," new "Auto-promotion," and "Review cadence"
+  sections), `docs/pipeline-learnings.md`, `docs/roadmap.md` (a new Built
+  entry, "Phase 3, part 11"), and `README.md`'s "Does this get smarter
+  over time?" section (a new diagram, the auto-promote rule stated
+  plainly, a new "Key files" list, "Run locally" removed per this task's
+  own instruction) all rewritten for the new architecture, not just
+  patched at the edges.
+
+**Item 4's own explicit ask, answered directly, not just asserted.**
+Checked exactly how the offline suite builds or mocks the prompt before
+touching anything: `structureTranscript` (`src/pipeline/structure.js`)
+takes an injected `callModel` and never imports `src/pipeline/prompt.js` or
+touches Firestore, in either the offline harness or production; the only
+place `SYSTEM_PROMPT` is ever consumed at runtime is
+`scripts/check-prompt-sync.mjs`. Since reference-example assembly moved
+entirely into `functions/index.js`'s request handler and `prompt.js` never
+had it beyond an import that has now been removed, the offline suite needed
+**zero** mocking changes; the "smallest correct fix" this task asked for
+was recognizing that no fix was needed, not building one. Verified, not
+just reasoned: `npm run eval` reran clean with `functions/node_modules`
+removed entirely (proving no accidental live dependency crept in) and
+stayed at 67/67 throughout every step of this pass.
+
+**What was not, and could not yet be, verified live in this environment.**
+The trigger's own logic (grading, reconstruction, the two-signal
+auto-promote rule) was verified thoroughly offline: unit tests for
+`reconstructCorrectedTree` (three cases, including the honest failure
+case), a live Firestore round-trip for the seed migration and the request-
+time `fetchReferenceExamples`/`formatReferenceExamples` read (both run
+directly against the real `referenceExamples` collection, not mocked), and
+the full `npm run eval` suite. **A real end-to-end trigger firing, on a
+real trace, in the deployed Cloud Functions environment, was not observed
+in this pass before merge**; that happens as part of this pass's own
+deploy-and-verify step, logged separately once done, stated here plainly
+rather than left implicit.
+
+Verified: `npm run eval` 67/67 (18 fixtures/contract cases, 12 date, 26
+Todoist, 11 write, prompt sync check now covering two hand-synced pairs
+behaviorally and one byte for byte). `npm run build` clean, asset hashes
+unchanged from the prior deploy (confirming none of `functions/`'s new
+code reaches the client bundle, checked by grepping `dist/` for
+`gradeStructureTrace`/`pipelineLearningLog`/`onDocumentWritten`, none
+found). `node scripts/check-secrets.mjs` clean. `node --check` clean on
+every changed or new file under `functions/`.
+
+### Decisions not to relitigate
+
+- `referenceExamples` and `pipelineLearningLog` are both top-level
+  Firestore collections, not nested under `users/{uid}`: neither is one
+  user's data, both are global pipeline state. Do not move either under a
+  user's own subtree on the assumption that was an oversight.
+- `pipelineLearningLog` only ever gets an entry when the grader actually
+  flagged something. A trace where both signals said "ok" writes nothing
+  here, on purpose; do not "fix" this into logging every graded trace
+  expecting a more complete audit trail, that is what `structureTraces`
+  itself already is.
+- `uid` and `mirrored` on `pipelineLearningLog`, and the `"manual"` value
+  on `referenceExamples.source`, are all real additions beyond this task's
+  own literal field/value lists, each because the feature could not
+  function correctly without it, not because more fields seemed like a
+  good idea. Do not strip them back out to match the letter of an older
+  spec.
+- Reconstruction's inability to recover an "edited, then removed" task's
+  original content is a real, permanent limitation of what
+  `structureTraces` persists today, not a bug to chase. Fixing it for real
+  would mean changing what the outcome payload persists (a second full
+  corrected tree, not just a diff), a distinct, larger decision this pass
+  does not make unilaterally.
+- `functions/contracts.js` is a fourth instance of this app's hand-synced-
+  file pattern, accepted the same way the others were: restructuring
+  `functions/` into an importable ESM package was already considered and
+  rejected once (docs/resolution-log.md, 2026-07-06) for a duplication
+  this small; that reasoning still holds, now for a third pair, not just
+  a second.
+- `scripts/check-prompt-sync.mjs`'s `contracts.js` probe cases must
+  include boundary values, not only obviously-invalid ones. This is not a
+  style preference; a probe suite using only priority 9 already proved it
+  can miss a real, deliberately-introduced drift at the actual boundary
+  (priority 5 vs. the real cap of 4).
+
 ## 2026-07-13: README.md brought back in line with the merged pipeline (accuracy pass, not a rewrite)
 
 `README.md` is the first thing anyone outside this project reads, and it

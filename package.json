@@ -19,6 +19,9 @@
     "traces:list": "node scripts/list-traces.mjs",
     "traces:promote": "node scripts/promote-trace.mjs",
     "traces:grade": "node scripts/grade-traces.mjs",
+    "seed:reference-examples": "node scripts/seed-reference-examples.mjs",
+    "review-queue": "node scripts/review-queue.mjs",
+    "sync-learnings": "node scripts/sync-learnings.mjs",
     "verify:prod-env": "node scripts/verify-prod-env.mjs"
   },
   "dependencies": {

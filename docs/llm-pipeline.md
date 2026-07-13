@@ -171,48 +171,73 @@ it lands.
 
 ### Reference examples
 
-The real Structure call sees more than written rules. `src/pipeline/referenceExamples.js`
-exports a small, curated array (four entries) of `{ transcript, response }`
-pairs, hand-picked from `evals/fixtures/` for real variety: a clean single
-project with nested sub-tasks, a real multi-section trip (the priority-
-corrected version of the camping-trip trace, not the raw buggy one), a
-restraint case that stays loose tasks instead of becoming a project, and a
-case where sections earn their keep. `formatReferenceExamples` turns that
-array into a labeled `PAST REFERENCE EXAMPLES` block, appended to
-`SYSTEM_PROMPT` below the written rules. The block states plainly that these
-are historical reference material, not the current user's transcript, so the
-model does not confuse them with live input; this matters for
-`isGroundedInTranscript` too (`src/pipeline/contracts.js`), which only ever
-checks a response's content against the real transcript argument passed to
-`structureTranscript`, never against this block.
+The real Structure call sees more than written rules. `referenceExamples`
+(a top-level Firestore collection, `docs/architecture.md`) holds `{
+transcript, response }` pairs; `functions/index.js`'s `/api/structure`
+handler fetches the current pool at request time (ordered `addedAt`
+descending, capped at 30), formats it into the same labeled `PAST
+REFERENCE EXAMPLES` block a file-based version used to produce, and appends
+it to `STRUCTURE_SYSTEM_PROMPT_RULES`. The block states plainly that these
+are historical reference material, not the current user's transcript, so
+the model does not confuse them with live input; this matters for
+`isGroundedInTranscript` too (`src/pipeline/contracts.js`, mirrored in
+`functions/contracts.js`), which only ever checks a response's content
+against the real transcript argument for the current call, never against
+anything in this block.
 
-This is separate from `evals/fixtures/`, which still exists and still does
-its own job: fixtures run through the offline harness (`npm run eval`) with
-a mocked `callModel`, testing the pipeline's own plumbing (contract
-validation, grounding, the retry path), never a real model call. Reference
-examples exist to teach the live model; fixtures exist to test the code
-around it. A fixture can graduate into a reference example (as three of the
-four here did) but the two collections serve different purposes and neither
-substitutes for the other.
+**This moved out of source files and into Firestore**, so the pool can grow
+from real usage between deploys, not only when someone edits a file and
+redeploys. It started as `src/pipeline/referenceExamples.js`, a hand-picked
+array of four (a clean single project with nested sub-tasks, a real
+multi-section trip, a restraint case that stays loose tasks, a case where
+sections earn their keep), hand-synced into `functions/referenceExamples.js`
+the same way `SYSTEM_PROMPT` itself was. Those four are still exactly what
+the live model sees first: `scripts/seed-reference-examples.mjs` copied them
+into `referenceExamples` with `source: "seed"` before both files were
+deleted; a seed document is never auto-deleted by anything below. Every
+document beyond those four seeds arrives one of two ways: automatically
+(`source: "auto-promoted"`, the trigger described under "Live capture and
+the eval flywheel" below) or by hand (`source: "manual"`,
+`scripts/review-queue.mjs`, during the monthly review).
 
-To edit: swap or update an entry in `src/pipeline/referenceExamples.js`,
-then copy the identical change into `functions/referenceExamples.js`
-(Firebase Functions deploys only the `functions/` directory and cannot
-import `src/pipeline`, the same constraint `SYSTEM_PROMPT` itself already
-has, docs/resolution-log.md, 2026-07-06). `scripts/check-prompt-sync.mjs`
-diffs both `SYSTEM_PROMPT` strings and both `REFERENCE_EXAMPLES` arrays and
-fails loudly on drift; it runs in `npm run eval` and as its own `ci.yml`
-step, so an edit to only one copy fails CI instead of drifting silently
-until a live incident, the same failure mode that already shipped once with
-the priority-direction bug (docs/resolution-log.md, 2026-07-08).
+This is still separate from `evals/fixtures/`, which still exists and still
+does its own job: fixtures run through the offline harness (`npm run eval`)
+with a mocked `callModel`, testing the pipeline's own plumbing (contract
+validation, grounding, the retry path), never a real model call, never
+touching Firestore. Reference examples exist to teach the live model;
+fixtures exist to test the code around it. Neither collection substitutes
+for the other, and moving reference examples to Firestore changed nothing
+about that: `structureTranscript` (`src/pipeline/structure.js`) never
+imports `src/pipeline/prompt.js` or touches Firestore either, so the
+offline suite's zero-credit, zero-network guarantee holds exactly as
+before, verified directly by running it with `functions/node_modules`
+removed and with no network access assumed, not just asserted.
 
-Offline evals cannot prove this changed real model behavior; they never call
-the real model, mocked or not. What CI actually verifies is that the
-formatting function produces non-empty, well-formed text, that the block is
-really appended to `SYSTEM_PROMPT`, and that both hand-synced copies match.
-Whether the live model structures better with these examples in context is a
-live-call question, spot-checked by hand (`EVAL_ALLOW_LIVE=true npm run
-eval:live` or a real `/api/structure` call), not asserted in CI.
+To edit the written rules half (not the example pool, which now only ever
+changes through Firestore, either automatically or via
+`scripts/review-queue.mjs`/`scripts/seed-reference-examples.mjs`): edit
+`src/pipeline/prompt.js`'s `SYSTEM_PROMPT`, then copy the identical change
+into `functions/index.js`'s `STRUCTURE_SYSTEM_PROMPT_RULES` (Firebase
+Functions deploys only the `functions/` directory and cannot import
+`src/pipeline`, docs/resolution-log.md, 2026-07-06). The contract validator
+needed by auto-promotion below is a third hand-synced pair for the same
+reason: `src/pipeline/contracts.js` <-> `functions/contracts.js`.
+`scripts/check-prompt-sync.mjs` catches drift in both pairs, the rules text
+compared byte for byte (the text itself is the artifact), the contracts
+functions compared behaviorally against a shared set of probe cases (they
+are code, not a string, so "matches" means "produces the same output," not
+"is the same characters"). Runs in `npm run eval` and as its own `ci.yml`
+step, so an edit to only one copy of either pair fails CI instead of
+drifting silently until a live incident, the same failure mode that already
+shipped once with the priority-direction bug (docs/resolution-log.md,
+2026-07-08) and that the reference-examples file pair itself used to be a
+second instance of, before moving to Firestore retired it.
+
+Offline evals cannot prove any of this changed real model behavior; they
+never call the real model, mocked or not. Whether the live model structures
+better with a given example pool in context is a live-call question,
+spot-checked by hand (`EVAL_ALLOW_LIVE=true npm run eval:live` or a real
+`/api/structure` call), not asserted in CI.
 
 ## Stage 3: Write
 
@@ -331,40 +356,95 @@ it always has; `edits` is never sent for `"confirmed"` or `"cancelled"`.
 
 ### Automatic grading
 
-`npm run traces:grade -- --uid <uid>` (`scripts/grade-traces.mjs`) is a
-cheap, automatic first pass over ungraded traces, so nobody has to read a
-growing collection blind before the review cadence below even starts. It
-finds `structureTraces` documents with no `judgedAt` field yet and, for
-each, makes one call on this app's default Haiku model, never Sonnet: the
-grader must never touch the same model or cost tier as the real structuring
-call it is checking. The judge compares a trace's own `transcript` against
-its own `response` and returns two simple verdicts, `"ok"` or `"flag"`,
-each with a one-line reason: whether anything the transcript mentioned
-seems to be missing from the response, and whether priority or due dates
-look defensible given the transcript's own wording. It writes
+Grading is automatic now, not a command someone has to remember to run.
+`functions/index.js` exports `gradeStructureTrace`, an `onDocumentWritten`
+Firestore trigger on `users/{uid}/structureTraces/{traceId}`: the moment
+`POST /api/structure/outcome` writes a real outcome onto a trace, this
+fires, grades it, and writes the result back, before the review cadence
+below ever has to touch it. Never part of a live user request; it runs
+asynchronously, after the client has already gotten its response.
+Same rule as always: this app's default Haiku model, never Sonnet, so
+grading can never be confused with, or billed against, the real structuring
+call it checks. The judge compares a trace's own `transcript` against its
+own `response` and returns two simple verdicts, `"ok"` or `"flag"`, each
+with a one-line reason: whether anything the transcript mentioned seems to
+be missing from the response, and whether priority or due dates look
+defensible given the transcript's own wording. It writes
 `judgeCompleteness`, `judgeCorrectness`, `judgeNotes`, and `judgedAt` back
 onto the trace as a merge write, `transcript` and `response` untouched.
-`npm run traces:list` shows the judge fields when present, flagged traces
-marked plainly, so a listing immediately surfaces what needs a look.
-Bounded by `LLM_SPEND_CEILING_USD`, the same local spend-ceiling convention
-`scripts/trace-summary.mjs` already uses, so a big batch run can't run away
-on cost by accident; `--limit` additionally caps how many ungraded traces
-one run grades.
+Guarded against retriggering itself: it checks `judgedAt` is not already
+set before doing anything, so the write that grades a trace produces one
+harmless extra invocation, never a loop. `npm run traces:list` still shows
+the judge fields when present.
 
-**This grader only flags. It never edits `src/pipeline/prompt.js` and never
-writes an eval fixture itself.** Whether a flagged (or unflagged) trace is
-worth a prompt change, or worth promoting into `evals/fixtures/*.json`
-(`npm run traces:promote`), stays a human decision, exactly as it is today;
-the grader narrows what a human has to read, it does not replace the
-reading. Its own judgment is not infallible either, and should not be
-trusted blindly: spot-check its verdicts against a real manual read on the
-same review cadence below, the same "confirmed does not mean correct"
-lesson that already applied once to a user's own Confirm click before this
-grader existed (a confirmed trace with an inverted priority on two tasks,
-`docs/resolution-log.md`, 2026-07-08). A grader that flags things wrong
-often enough, or misses things a manual read catches, is itself a finding
-worth a resolution-log entry, the same as any other failure mode this
-flywheel surfaces.
+`scripts/grade-traces.mjs`, the original manual command, still exists,
+unchanged in what it does, now a backfill tool for the two real cases the
+trigger cannot cover on its own: a trace written before the trigger
+existed (nothing re-fires a trigger for a document that already sits
+there with no new write coming), and a trigger invocation that itself
+failed (its own `try`/`catch` logs the error and leaves `judgedAt` unset
+rather than retrying).
+
+**This grader only flags. It never edits `src/pipeline/prompt.js` and
+never writes an eval fixture itself**, with exactly one narrow exception,
+covered in "Auto-promotion" below, and even that exception only ever
+touches `referenceExamples`, never the written rules. Its own judgment is
+not infallible either, and should not be trusted blindly: spot-check its
+verdicts against a real manual read on the same review cadence below, the
+same "confirmed does not mean correct" lesson that already applied once to
+a user's own Confirm click before this grader existed (a confirmed trace
+with an inverted priority on two tasks, `docs/resolution-log.md`,
+2026-07-08). A grader that flags things wrong often enough, or misses
+things a manual read catches, is itself a finding worth a resolution-log
+entry, the same as any other failure mode this flywheel surfaces.
+
+### Auto-promotion
+
+Two independent signals agreeing is the bar for anything to move on its
+own; everything else waits for a human. Specifically: when a trace's
+outcome is `"confirmed_with_edits"` (the user removed a task, edited
+content, or renamed the project before confirming) **and** the grader
+flags the model's original response, `gradeStructureTrace` reconstructs
+the corrected tree the user's edits actually describe and, if that
+succeeds and the result passes the same contract check
+`scripts/promote-trace.mjs` already runs (`validateStructure`, the
+grounding guard, this time via `functions/contracts.js`, the hand-synced
+copy `src/pipeline/contracts.js` needs for the same cross-boundary reason
+`SYSTEM_PROMPT` does), writes it into `referenceExamples` as `source:
+"auto-promoted"`. `referenceExamples` stays bounded at 30 documents: a
+write past that deletes the oldest auto-promoted one, never a seed.
+
+**Reconstruction is honest about what it can and cannot do, and this is a
+real, documented limitation, not an oversight.** `structureTraces` only
+ever persists `response` (the model's real, untouched output) and `edits`
+(a diff: `removedTasks`, `contentEdits`, `projectNameChange`), never a
+second full corrected tree, so the corrected tree has to be replayed onto
+a clone of `response`. Content edits are always reliable:
+`contentEdits[].originalContent` is captured client-side on the first edit
+to a task, before any change, so it always matches the pristine response.
+Removals are reliable in the common case, a task removed without ever
+being content-edited first, but **not** for the "edited, then removed"
+sequence: `SuperRambleModal.jsx`'s own `removeTask` drops any pending
+`contentEdits` entry for a task once it is removed, so `removedTasks[].content`
+in that sequence holds the edited text, text that was never written back
+into `response` by a matching `contentEdits` entry either. When
+reconstruction cannot locate every `removedTasks` entry, it does not guess;
+it reports the miss and auto-promotion is skipped for that trace, the same
+fail-closed posture the rest of this pipeline already takes on anything it
+cannot verify. A routing trace (`response.targetProjectId` set) is also
+skipped outright, even with two agreeing signals: a reference example has
+to stay generic and reusable across any future call, never tied to one
+real historical Firestore id, the same reason the four original seed
+examples all have `targetProjectId: null` to begin with, not by accident.
+
+Every other flagged case, cancelled, a plain confirm the grader still
+flagged, or a confirmed-with-edits trace where auto-promotion could not be
+attempted or failed one of the checks above, is logged instead of acted
+on: one `pipelineLearningLog` document (`docs/architecture.md`), `kind:
+"flagged"`, `resolved: false`, a one-line summary built from the grader's
+own notes (or the specific reason auto-promotion did not happen). A plain
+"ok" on both signals writes nothing here at all; there is nothing worth a
+human's monthly attention in a trace nothing flagged.
 
 ### Review cadence
 
@@ -375,10 +455,21 @@ against near-empty data. Each review:
 
 1. `npm run traces:list -- --uid <uid>` and read the raw counts: total,
    confirmed vs. cancelled vs. still pending, and the date range.
-2. Review every cancelled trace first (the tool's own sort order): a
+2. `npm run review-queue` and work through every unresolved
+   `pipelineLearningLog` entry (`kind: "flagged"`), oldest first: each one
+   is either a trace the grader flagged that could not auto-promote (a
+   cancellation, a plain confirm, or a failed reconstruction), stated
+   plainly in its own summary. Decide, per entry, whether it should still
+   teach the model something. `--resolve <logId>` alone marks it looked
+   at and done; `--resolve <logId> --promote` (with either
+   `--use-live-response` or a hand-corrected `--expected-file`, the exact
+   convention `scripts/promote-trace.mjs` already uses) promotes it into
+   `referenceExamples` by hand, `source: "manual"`, the same validation
+   gate the automatic path runs.
+3. Review every cancelled trace next (the tool's own sort order): a
    rejected proposal is the highest-signal case, the model got something
    wrong that mattered enough to reject outright.
-3. Review confirmed traces next, field by field against the transcript
+4. Review confirmed traces next, field by field against the transcript
    (decision, sections, priorities, due dates, confidence), never assumed
    correct because a person clicked Confirm. **This is not optional
    diligence**: the 2026-07-08 "First real review of the Structure trace
@@ -386,22 +477,33 @@ against near-empty data. Each review:
    ever reviewed had an inverted priority on two tasks, exactly the bug that
    had already shipped once under the assumption that "confirmed" meant
    "correct."
-4. Promote 1 to 3 fixtures that add real, new coverage (a different
+5. Promote 1 to 3 fixtures that add real, new coverage (a different
    transcript style, a routing case, a genuinely ambiguous one, a
    multilingual one), not an exhaustive promotion of everything found.
    Quality of coverage over quantity.
-5. Cross-check `users/{uid}/llmUsage`'s request count against
+6. `npm run sync-learnings`, once every entry worth keeping has a decision
+   (an auto-promotion needs none, a flagged entry needs `resolved: true`
+   from step 2): mirrors every eligible `pipelineLearningLog` entry into
+   `docs/pipeline-learnings.md` as a short, dated line and marks it
+   mirrored, so the next run only appends what is new. This is the one
+   step that turns the database log into the committed file; nothing else
+   in this flywheel writes to that file directly.
+7. Cross-check `users/{uid}/llmUsage`'s request count against
    `structureTraces`'s document count for the same day. A mismatch means
    the fallback-write path (`docs/architecture.md`, `traceWriteFailed`) is
    firing, real calls are happening with degraded or zero trace capture,
    and that needs its own investigation, not a silent shrug. This exact
    mismatch is how the 2026-07-08 review found the gap the fallback path
    now guards against.
-6. Report actual spend (`users/{uid}/llmUsage`, summed across every dated
+8. Report actual spend (`users/{uid}/llmUsage`, summed across every dated
    document) against `DAILY_COST_LIMIT_USD`. Do not use
    `npm run trace:summary` for this: that script only ever reads local
    `llm-traces/`, populated only by local live-eval runs, never production
    usage.
-7. Flag, do not fix in the same pass, any failure mode that isn't already
+9. Flag, do not fix in the same pass, any failure mode that isn't already
    tracked in `docs/resolution-log.md`. A review pass finds problems; a
    separate, scoped pass fixes them, each with its own resolution-log entry.
+   This includes the grader itself: a verdict that looks wrong on a manual
+   read is exactly the kind of thing this step exists to catch, the same
+   "spot-check, don't trust blindly" posture "Automatic grading" above
+   already states.

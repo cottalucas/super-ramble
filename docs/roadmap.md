@@ -752,6 +752,64 @@ three items, not two.
 See docs/resolution-log.md, 2026-07-10, for what was verified live versus
 only checked via build and eval.
 
+Phase 3, part 11: reference examples moved from source files into Firestore,
+and grading became automatic, triggered, with a real (bounded) auto-
+promotion path instead of a person running a script by hand. See
+docs/resolution-log.md's dated entry for this pass.
+
+- `referenceExamples` (new, top-level Firestore collection,
+  `docs/architecture.md`) replaces `src/pipeline/referenceExamples.js` and
+  `functions/referenceExamples.js`, both deleted once
+  `scripts/seed-reference-examples.mjs` confirmed the original four hand-
+  picked examples landed with `source: "seed"`. `functions/index.js`'s
+  `/api/structure` handler fetches the current pool at request time
+  (`addedAt` descending, capped at 30) instead of reading a value frozen at
+  build time; `src/pipeline/prompt.js`'s `SYSTEM_PROMPT` goes back to being
+  just the written rules, the reference-example block is not something it
+  builds anymore.
+- `gradeStructureTrace` (new, `functions/index.js`), an `onDocumentWritten`
+  trigger on `users/{uid}/structureTraces/{traceId}`: grades a trace on
+  Haiku automatically the moment its outcome is written, the same call
+  `scripts/grade-traces.mjs` already made by hand, now triggered instead of
+  run as a batch job. `grade-traces.mjs` itself is unchanged, now a
+  backfill tool for traces that predate the trigger or a failed
+  invocation.
+- Auto-promotion, the same trigger, right after grading: when a trace is
+  `confirmed_with_edits` and the grader also flags the original response,
+  the trigger reconstructs the corrected tree from `response` plus `edits`
+  and, if that reconstruction and a contract check
+  (`functions/contracts.js`, a new hand-synced copy of
+  `src/pipeline/contracts.js` for the same cross-boundary reason
+  `STRUCTURE_SYSTEM_PROMPT_RULES` already needs one) both succeed, writes
+  it into `referenceExamples` as `source: "auto-promoted"`. Reconstruction
+  is honest about a real limitation (an "edited, then removed" task cannot
+  be recovered from the persisted diff alone) rather than guessing; when it
+  can't fully account for the edits, promotion is skipped, not attempted
+  with a possibly-wrong tree.
+- `pipelineLearningLog` (new, top-level Firestore collection): one entry
+  per trace the grader flagged, `kind: "auto-promoted"` or `"flagged"`.
+  `scripts/review-queue.mjs` (new) lists unresolved flagged entries for the
+  monthly human review, with an optional manual promotion
+  (`source: "manual"`) reusing `scripts/promote-trace.mjs`'s own
+  validation. `scripts/sync-learnings.mjs` (new) is the one step that
+  mirrors resolved log entries into `docs/pipeline-learnings.md`, so that
+  file stays something a person reads, not something a live Function
+  writes to directly.
+- `scripts/check-prompt-sync.mjs` stopped checking a
+  `referenceExamples.js` pair (it no longer exists) and started checking
+  `contracts.js`'s new pair instead, behaviorally (a shared set of probe
+  cases run against both copies and compared), since a validator is code,
+  not a string that can be diffed byte for byte the way `SYSTEM_PROMPT`
+  can.
+- Offline evals needed no mocking changes at all:
+  `structureTranscript` (`src/pipeline/structure.js`) never imported
+  `src/pipeline/prompt.js` or touched Firestore before this pass either, so
+  removing prompt.js's own Firestore-adjacent dependency (there never was
+  one directly, only via the now-deleted `referenceExamples.js` import)
+  left the offline suite's zero-credit, zero-network guarantee completely
+  intact, verified directly (`functions/node_modules` removed, full
+  `npm run eval` rerun clean) rather than assumed.
+
 ## Next
 
 Phase 3, part 10: a natural-language date parser, so a task's `due`

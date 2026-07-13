@@ -215,6 +215,56 @@ to promote. See `docs/llm-pipeline.md` and the resolution log entry dated
 2026-07-07 for what this is for and why it reopens an earlier privacy
 stance.
 
+`referenceExamples/{exampleId}` (top-level, not nested under `users/{uid}`:
+a reference example teaches the live model on every future call regardless
+of whose transcript prompted it, so it is not one user's data)
+- `transcript`: string
+- `response`: object, the same shape as a Structure response
+- `source`: `"seed" | "auto-promoted" | "manual"` (the third value is not
+  part of this collection's original two-value design; `scripts/review-queue.mjs`
+  needed a way to mark a human's own manual promotion as distinct from
+  both the original four hand-picked examples and an automatic one, and
+  reusing either existing value for that would have been actively
+  misleading provenance, not a simplification)
+- `addedAt`: server timestamp
+- `promotedFromTraceId`: string | null (the `structureTraces` document this
+  came from, `null` for a seed)
+- `notes`: string | null
+
+Fetched fresh on every real `/api/structure` call (`functions/index.js`,
+ordered `addedAt` descending, capped at 30), formatted into the same
+labeled `PAST REFERENCE EXAMPLES` prompt block the old file-based version
+produced, and appended to `STRUCTURE_SYSTEM_PROMPT_RULES`. Bounded at 30
+documents: once a write would take the collection over that, the oldest
+non-seed document is deleted, never one of the original four. Never read or
+written by the client SDK; only the Function (the `/api/structure` handler
+that reads it, and the `structureTraces` trigger below that may write to
+it) and local scripts (`scripts/seed-reference-examples.mjs`,
+`scripts/review-queue.mjs`) touch it. See `docs/llm-pipeline.md`, Stage 2.
+
+`pipelineLearningLog/{logId}` (also top-level, for the same reason)
+- `date`: server timestamp
+- `kind`: `"auto-promoted" | "flagged"`
+- `uid`: string (not part of this collection's original field list; without
+  it, nothing reading this top-level collection could find the trace back
+  under its owning `users/{uid}/structureTraces` subcollection to review or
+  promote it, so it is written anyway, a functional requirement rather than
+  optional detail)
+- `traceId`: string
+- `summary`: string, one line built from the grader's own notes
+- `resolved`: boolean, `false` by default
+- `mirrored`: boolean, `false` by default (also not in the original field
+  list, for the same reason as `uid`: `scripts/sync-learnings.mjs` needs a
+  way to know which entries it has already mirrored into
+  `docs/pipeline-learnings.md`, so a second run only appends what is new)
+
+Written by the `structureTraces` trigger below, once per graded trace that
+the grader actually flagged (a plain "ok" on both signals writes nothing
+here; there is nothing worth a human's monthly attention in it). Updated by
+`scripts/review-queue.mjs` (`resolved`) and `scripts/sync-learnings.mjs`
+(`mirrored`). Never read or written by the client SDK. See
+`docs/llm-pipeline.md`'s "Live capture and the eval flywheel" section.
+
 Nesting depth: no fixed depth limit on `parentId` or `parentProjectId`, the
 UI just renders whatever depth exists. A sub-task can have its own sub-task,
 and so on; a task row's visual indent still caps at two steps (`sub`/`sub2`
@@ -441,6 +491,26 @@ or cancelled the proposal. See `docs/llm-pipeline.md` for how this feeds the
 offline eval suite, and the resolution log entry dated 2026-07-07 for why
 this reopens what this doc used to say about raw traces staying off in
 production.
+
+### Background triggers
+
+`functions/index.js` exports one Firestore trigger alongside the HTTP
+endpoints above: `gradeStructureTrace`, `onDocumentWritten` on
+`users/{uid}/structureTraces/{traceId}`. Never runs as part of a live user
+request; it fires asynchronously, after `POST /api/structure/outcome` has
+already responded to the client. Guarded against retriggering on its own
+write (it checks `judgedAt` is not already set before doing anything, the
+same field its own write sets, so the write that grades a trace produces a
+second invocation that immediately no-ops rather than a loop). Grades on
+this app's default Haiku model, never Sonnet, the same model rule
+`scripts/grade-traces.mjs` already followed as a manual script; when the
+outcome is `"confirmed_with_edits"` and the grader flags the original
+response, it also attempts to reconstruct the corrected tree from
+`response` plus `edits` and, if that reconstruction and a contract
+validation both succeed, writes it into `referenceExamples` automatically.
+See `docs/llm-pipeline.md`'s "Live capture and the eval flywheel" section
+for the full mechanism, including what makes reconstruction fail and why
+that is a real, known limitation, not an oversight.
 
 ## Secrets
 

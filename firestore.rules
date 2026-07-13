@@ -59,6 +59,25 @@ service cloud.firestore {
       }
     }
 
+    // The live reference-examples pool and the pipeline-learnings log are
+    // both global, not scoped under a single users/{uid}: a reference
+    // example teaches the live model for every future call regardless of
+    // whose transcript prompted it, so it lives at the top level like these
+    // two, not nested per-user. Never read or written by the client SDK: only
+    // the Function (the /api/structure handler that reads referenceExamples,
+    // and the structureTraces trigger that grades and may write to both),
+    // and local scripts (seed-reference-examples.mjs, review-queue.mjs,
+    // sync-learnings.mjs, also Admin SDK) touch either collection. Admin SDK
+    // bypasses rules regardless of what they say, so these lines state
+    // intent, the same as structureTraces/todoistAuth above; they are not
+    // the real gate.
+    match /referenceExamples/{exampleId} {
+      allow read, write: if false;
+    }
+    match /pipelineLearningLog/{logId} {
+      allow read, write: if false;
+    }
+
     // Deny everything else by default.
     match /{document=**} {
       allow read, write: if false;
