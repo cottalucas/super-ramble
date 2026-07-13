@@ -3,6 +3,112 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-13: Real reference examples wired into the live Structure prompt
+
+Closed a real gap: `evals/fixtures/*.json` holds hand-verified transcript-to-
+correct-output pairs, but they were only ever consumed by `npm run eval`,
+which mocks `callModel` entirely and never makes a real call. The live
+model, hit by every real user on the deployed site, saw zero examples, only
+written rules in `SYSTEM_PROMPT`. Now it sees four curated worked examples
+too.
+
+**What shipped.**
+
+- `src/pipeline/referenceExamples.js` (new): `REFERENCE_EXAMPLES`, four
+  `{ transcript, response }` pairs copied verbatim (not retyped) from
+  `evals/fixtures/01-clear-single-project.json`,
+  `08-big-sur-camping-trip.json` (the priority-corrected version promoted
+  2026-07-08, not the raw buggy trace), `06-no-mega-restructure.json` (a
+  restraint example: unrelated items must not become a project), and
+  `07-sections-when-they-help.json`. `formatReferenceExamples` turns the
+  array into a `PAST REFERENCE EXAMPLES` block, stated plainly as historical
+  reference material, never the current user's transcript, so the model
+  does not confuse a past example's wording with live input. This does not
+  change `isGroundedInTranscript` (`src/pipeline/contracts.js`): it only
+  ever checks a response's content against the real `transcript` argument
+  `structureTranscript` was called with, never against `SYSTEM_PROMPT`
+  itself, so the no-invention guard is unaffected by anything appended to
+  the prompt.
+- `src/pipeline/prompt.js`: the existing rules array (now
+  `STRUCTURING_RULES`, unexported) plus
+  `formatReferenceExamples(REFERENCE_EXAMPLES)` are joined into the
+  exported `SYSTEM_PROMPT`, the rules unchanged, the reference block
+  appended below them.
+- `functions/referenceExamples.js` (new) and `functions/index.js`'s
+  `STRUCTURE_SYSTEM_PROMPT`: an identical, hand-synced mirror, the same
+  duplication `SYSTEM_PROMPT` itself already requires (Firebase Functions
+  deploys only `functions/` as its own CommonJS package and cannot import
+  `src/pipeline`; docs/resolution-log.md, 2026-07-06). `functions/index.js`
+  now also exports `STRUCTURE_SYSTEM_PROMPT` (previously only `exports.api`
+  existed), so a script can read it without spinning up a request.
+- `scripts/check-prompt-sync.mjs` (new): diffs the two `SYSTEM_PROMPT`
+  strings byte for byte and the two `REFERENCE_EXAMPLES` arrays
+  structurally, plus a sanity check that `formatReferenceExamples` produces
+  non-empty text and that `SYSTEM_PROMPT` actually contains it (catches
+  "defined but never appended," not just array drift). Requires
+  `functions/index.js` via `createRequire` to read its export; verified
+  live in this environment that requiring it has no problematic side
+  effects (`admin.initializeApp()` and `defineSecret()` are both lazy, no
+  credentials needed to load the module, the same assumption
+  `scripts/list-traces.mjs`/`promote-trace.mjs` already lean on for the
+  Admin SDK). Verified the check actually fails on real drift, not just the
+  happy path: temporarily edited one copy only, confirmed both failure
+  messages fired with exit code 1, restored, reran clean. Wired into
+  `npm run eval` (new `check:prompt-sync` script, last step) and as its own
+  `ci.yml` step ("Prompt sync check") so a drift regression shows as its
+  own red X, not buried inside the eval step's output. This is the guard
+  against a fourth silent drift of this exact hand-synced duplication; the
+  priority-direction bug (2026-07-08) is the reason this convention gets
+  its own script now instead of "verified with a direct diff, not
+  eyeballed" by hand each time.
+- `docs/llm-pipeline.md`: new "Reference examples" section under Stage 2.
+  States what this is, where it lives, how to edit it (swap an entry in
+  `src/pipeline/referenceExamples.js`, copy the same change into
+  `functions/referenceExamples.js`, let the sync script catch a miss), and
+  states plainly that this is separate from `evals/fixtures/`, which still
+  tests the pipeline's own plumbing offline, not the live model.
+
+**What this does not prove.** Offline evals never call the real model,
+mocked or not; they cannot show this changed live model behavior, and
+nothing in this pass claims that. What CI actually verifies: the formatting
+function produces non-empty, well-formed text; the block is really appended
+to `SYSTEM_PROMPT`; the two hand-synced copies match. A real live call
+before and after, spot-checked by hand
+(`EVAL_ALLOW_LIVE=true npm run eval:live` or a real `/api/structure` call),
+is the only way to see whether the live model structures better with these
+examples in context; not run as part of this pass, stated in the PR
+description rather than asserted here.
+
+Verified: `npm run eval` 17/17 offline, 12/12 date, 26/26 todoist, prompt
+sync check passing (55/55 total, unchanged fixture/case counts from before
+this pass, since no fixture or contract changed, only what gets appended to
+the live prompt). `npm run build` clean. `node scripts/check-secrets.mjs`
+clean. `node --check functions/index.js` clean.
+
+### Decisions not to relitigate
+
+- `evals/fixtures/*.json` and `src/pipeline/referenceExamples.js` are
+  separate collections with separate jobs: fixtures test the pipeline's own
+  plumbing offline (contract validation, grounding, the retry path, all
+  mocked); reference examples teach the live model. Do not collapse them
+  into one array, and do not assume promoting a fixture into a reference
+  example removes it from `evals/fixtures/`; both stay.
+- `isGroundedInTranscript` was not touched and needed no change: it only
+  ever validates a response's content against the real transcript argument,
+  never against `SYSTEM_PROMPT`. Appending more text to the system prompt
+  can never widen or weaken this guard; do not add a special case for
+  reference-example text there.
+- `src/pipeline/referenceExamples.js` and `functions/referenceExamples.js`
+  are a third pair of hand-synced files, on top of `prompt.js`/
+  `STRUCTURE_SYSTEM_PROMPT` and `contracts.js`/`STRUCTURE_JSON_SCHEMA`.
+  `scripts/check-prompt-sync.mjs` is the enforcement mechanism now; do not
+  remove it or narrow it to "eyeball the diff" again.
+- Four reference examples, not more. The task scoped this tight
+  deliberately; do not grow the array opportunistically without a reason
+  as concrete as the four already there (one clean project, one real
+  multi-section trace, one restraint case, one sections-earn-their-keep
+  case).
+
 ## 2026-07-12: Migrated to a new repo with a single clean commit, not another history rewrite
 
 Follow-up to the same day's "Rewrote git history to remove the same leaked
