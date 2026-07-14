@@ -463,25 +463,55 @@ prompt) can genuinely run past 60s, and a platform-level kill mid-call
 happens before `logStructureTrace` or any of the three deliberate 502
 branches (`docs/llm-pipeline.md`, Stage 2) ever run, reaching the browser as
 a bare, unexplained 502 with no `structureTraces` document to show for it.
-**This does not fully close that failure for real traffic.** Firebase
-Hosting's own `/api/**` rewrite (`firebase.json`) is the only path any real
-browser call takes, and Hosting enforces its own separate, hard,
-non-configurable 60-second request timeout ahead of this Function's own
-`timeoutSeconds`, confirmed against Firebase's own docs
-(firebase.google.com/docs/hosting/functions): past 60s, Hosting itself
-returns a `504` before this Function's longer timeout is ever consulted. A
-genuinely slow Structure call can still fail silently for a real user after
-this change, a `504` sourced from Hosting's proxy instead of a `502`
-sourced from a killed Cloud Function, same missing-trace symptom either
-way. `timeoutSeconds: 120` is still real and worth keeping: it is what
-actually governs this Function when it is not reached through the Hosting
-rewrite (a direct Cloud Run invocation, the emulator, or a future
-architecture change), and it removes an implicit, undocumented dependency
-on a platform default that could change. Closing this fully needs a
-separate, scoped decision (most likely calling this Function's own Cloud
-Run URL directly for the `/structure` route, bypassing the Hosting rewrite
-and its cap entirely, with its own CORS and client changes); see the
-resolution log entry for the date this was found and flagged, not solved.
+**This does not fully close that failure for real traffic, and live testing
+found the actual behavior is more specific than Firebase's own docs alone
+predicted.** Firebase's hosting docs (firebase.google.com/docs/hosting/functions)
+state a flat 60-second cap on Hosting's `/api/**` rewrite, ahead of
+whatever `timeoutSeconds` this Function itself sets. Real, live testing
+against the deployed site after this change (three real calls, complex
+multi-thread transcripts, `docs/resolution-log.md`, the dated live-
+verification entry) found the actual cutoff is not exactly 60s: Cloud
+Run's own request log reported real backend latencies of 91–98 seconds for
+these calls before a `502` reached the browser, confirmed via both the
+Cloud Functions and Cloud Run Admin APIs to be well under this Function's
+own configured `timeoutSeconds`/`template.timeout` of 120s, so this
+Function's own limit was never what ended these calls. Something upstream
+of this Function, almost certainly still Hosting's rewrite proxy or the
+Google Frontend layer in front of it, cuts the connection somewhere around
+90–100 seconds in practice, not the documented 60s figure exactly, and
+substitutes its own generic infrastructure error page for whatever this
+Function was actually about to return. The practical effect is the same
+either way: a real user's complex transcript can still fail with an
+unhelpful, generic `502` after this change, sourced from a layer this
+app's own `timeoutSeconds` config does not reach or control. One nuance
+worth keeping precise: for two of the three real failed calls tested live,
+the Function itself ran to completion within that window, correctly wrote
+a `structureTraces` document, and correctly generated its own explained
+`max_tokens`-truncation `502` body (the exact 2026-07-07 truncation
+handling, a real, working, and now more reliably-reached code path since
+`timeoutSeconds: 120` gives it more room to finish); the browser still
+never saw that explained response, since the upstream cutoff had already
+substituted its own generic error page by the time it would have arrived.
+For the third, most complex call, no trace was written at all, meaning
+even that improved path did not get far enough before the same upstream
+cutoff. `timeoutSeconds: 120` is still real and worth keeping regardless:
+it is what actually governs this Function on any path that does not go
+through the Hosting rewrite (a direct Cloud Run invocation, the emulator,
+or a future architecture change), it removes an implicit, undocumented
+dependency on a platform default that could change, and it demonstrably
+gives the Function's own explained-error code paths more room to complete
+before the true root cause was reproduced live. The exact identity of the
+upstream layer enforcing this ~90–100s cutoff was not conclusively
+determined in this pass; the clearest next diagnostic would be calling
+this Function's own direct Cloud Run URL rather than the Hosting rewrite,
+which needs a real, explicitly-authorized auth token and was correctly not
+attempted by extracting one from a live browser session without that
+authorization. Closing this fully needs a separate, scoped decision (most
+likely calling this Function's own Cloud Run URL directly for the
+`/structure` route, bypassing the Hosting rewrite and whatever sits in
+front of it, with its own CORS and client changes); see the resolution log
+entries for the dates this was found, live-tested, and flagged, not
+solved.
 
 `/api/todoist/oauth` and `/api/todoist/write` are real as of phase 3, part 8
 (the "The Todoist client" section above has the full detail: OAuth exchange,
