@@ -3,6 +3,160 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-14: The complex-transcript 502 root-caused: a missing temperature: 0 on the live Structure call, not infra. The full arc, across four passes
+
+A real user-reported bug ("small text works fine, long text gets a bare
+502") took four passes to actually root-cause. Each earlier pass was a
+real, necessary elimination step, not wasted work, and this entry records
+the whole arc so a future reader does not have to reconstruct it from four
+separate dated entries. `max_tokens: 8192` was never touched across any of
+these passes; it was already fixed for a different, unrelated problem
+(model-level truncation, 2026-07-07).
+
+**Pass 1: `timeoutSeconds`.** `exports.api` had no `timeoutSeconds` set, so
+it ran on firebase-functions v2's unconfigured 60s default. Set to `120`.
+Real, correct, worth keeping: it is what actually governs this Function on
+any path that does not go through Firebase Hosting's `/api/**` rewrite.
+Live testing found it did not close the reported bug for real browser
+traffic, and corrected an initial assumption along the way: Hosting's own
+docs state a flat 60s rewrite-proxy cap, but real Cloud Run request logs
+showed real backend latencies of 91-98 seconds for three live failed
+calls, not 60, meaning something upstream (still almost certainly Hosting
+or the Google Frontend layer in front of it) cuts the connection later
+than documented, around 90-100s in practice, not exactly 60s.
+
+**Pass 2: phase-level timing, and a memory bump to rule out CPU
+throttling.** An Anthropic Workbench call using the exact same system
+prompt, schema, and transcript finished in 9.5s, a ~10x gap against the
+91-98s this Function took for the same request. That gap had to be inside
+this Function's own execution, not the model call in the abstract, so
+`checkAndReserveLimit`, `fetchReferenceExamples`, `client.messages.create`,
+`logUsage`, and `logStructureTrace` all got their own `Date.now()` timing,
+logged unconditionally to Cloud Logging (`console.log('structure phase
+timings', ...)`, not gated behind `STORE_RAW_TRACES`). Memory was bumped
+from the unconfigured 256MiB default to 512MiB as a first, moderate test
+of CPU throttling. Live testing after this deploy found a real failed
+call still took 96.26 seconds, essentially unchanged from before the
+memory bump, ruling out memory/CPU as the cause. The phase timing paid
+for itself immediately: `checkAndReserveLimit` (196ms),
+`fetchReferenceExamples` (605ms), `logUsage` (294ms), and
+`logStructureTrace` (516ms) together were under 1.6 seconds; **94,620 of
+the 96,232 total milliseconds, 98%, were inside `client.messages.create`
+itself.**
+
+**Pass 3 (this entry's own investigation): what was actually happening
+inside the model call.** Pulled every `structure phase timings` log entry
+recorded since the 512MiB deploy and matched each one to its Firestore
+trace by `traceId`, to see real output-token counts against real
+`modelCall` durations on the exact same deployed instance:
+
+| output tokens | modelCall duration | effective rate |
+|---|---|---|
+| 485 | 8.0s | ~61 tok/s |
+| 6,837 | 79.9s | ~86 tok/s |
+| 8,192 (hit the cap) | 94.6s | ~87 tok/s |
+
+A strikingly consistent generation rate across all three, meaning duration
+tracked almost exactly with how many tokens the model happened to
+generate, not anything about where the call originated. That reframed the
+Pass 2 Workbench comparison: it was never a fair apples-to-apples test,
+since the one Workbench sample (796 output tokens) and the real failing
+production calls (6,837-8,192 output tokens) were different completions
+with different lengths, not the same request behaving differently in two
+places. **The real question became why a supposedly identical transcript
+produces such wildly different completion lengths on repeated live
+calls**, and the answer was a real bug: `functions/index.js`'s
+`/structure` handler never set `temperature` on its `client.messages.create`
+call, so it ran on the Anthropic API's own default (1), not the
+`temperature: 0` `docs/llm-pipeline.md` has documented as this call's
+deliberate, stated architecture since phase 3 part 1. `src/pipeline/prompt.js`'s
+`buildMessages` does set `temperature: 0` correctly, but that function is
+never the live call path (Firebase Functions deploys only `functions/`,
+never `src/pipeline`, docs/resolution-log.md, 2026-07-06); the two copies
+had silently drifted apart on this one parameter, undetected, since
+whatever pass first wrote `functions/index.js`'s own copy of this call.
+Checked whether any other real call site independently sets its own
+temperature, for consistency: none does.
+`functions/index.js`'s own `gradeStructureTrace` grading call and
+`scripts/grade-traces.mjs`'s grading call both also omit `temperature`,
+same as the Structure call did, but neither is documented anywhere as
+requiring a specific temperature the way the Structure call is, so neither
+was touched; changing either without a stated reason would be an
+undocumented architectural decision this pass has no standing to make
+unilaterally.
+
+**What shipped.** `functions/index.js`'s `/structure` handler now sets
+`temperature: 0` on its `client.messages.create` call, matching
+`docs/llm-pipeline.md` and `src/pipeline/prompt.js` for the first time
+since this hand-synced pair was created. Without an unpinned temperature
+letting a complex transcript occasionally sample a long, exploratory
+completion (sometimes running the full `max_tokens: 8192` budget), a
+short transcript rarely had the same problem: there is little room for a
+long completion regardless of temperature on a short input, matching
+"small text works, long text 502s" exactly.
+
+**A real gap, flagged, not fixed in this pass.** `scripts/check-prompt-sync.mjs`
+only ever compared `STRUCTURE_SYSTEM_PROMPT_RULES` text and `contracts.js`
+behavior between the hand-synced pairs; it never checked the actual
+model-call parameters (`temperature`, `max_tokens`, the model id itself)
+for parity, which is exactly why this specific drift shipped silently and
+went undetected through every prior pass that touched either copy of this
+call. Closing this needs its own scoped design (what parameters actually
+need parity-checking, and how, given `functions/index.js`'s copy is
+extracted from source text the same way `STRUCTURE_SYSTEM_PROMPT_RULES`
+is today); not built here, on purpose, per this task's own instruction.
+
+**Also logged, not built:** `docs/roadmap.md`'s "Next" section now notes
+moving Structure off a synchronous request/response wait and onto
+listening for the `structureTraces` document instead (Firestore
+`onSnapshot`), since Pass 2's live testing already showed the Function
+completing a real call and writing a real trace that the browser never
+got the HTTP response for at all; waiting on the trace document directly
+would make a genuinely slow call resilient to exactly this class of
+upstream-timeout failure, not just less likely to trigger it. A real,
+separate architecture change, not attempted here.
+
+**Verified before deploy:** `npm run build` clean, asset hash unchanged
+(this pass touches only `functions/index.js` and docs, nothing under
+`src/`, so no hosting redeploy is needed, only `functions`). `npm run
+eval` 67/67, unaffected since this only adds a `temperature` parameter and
+a doc-only roadmap line, no change to anything the offline suite
+exercises (offline evals mock `callModel` and never construct a real
+Anthropic request). `node scripts/check-secrets.mjs` clean. `node --check
+functions/index.js` clean. Live verification (the original three-storyline,
+disambiguation-heavy transcript, submitted against the deployed site after
+merge and deploy) is logged in a follow-up entry, per this task's own
+instruction to verify the live result directly rather than trust a deploy
+command's exit code.
+
+### Decisions not to relitigate
+
+- The root cause of the complex-transcript 502 was a missing
+  `temperature: 0` on `functions/index.js`'s live `/structure` call, not
+  `timeoutSeconds`, not memory/CPU, and not `max_tokens`. Those three were
+  each genuinely tested and ruled out or otherwise correctly fixed across
+  Pass 1 and Pass 2; do not revisit any of them chasing this same symptom
+  again without new evidence.
+- A Workbench call and a deployed Function call producing wildly different
+  wall-clock times on "the same" transcript is not, by itself, proof the
+  difference is environmental. Check whether the two calls actually
+  produced completions of comparable length before concluding the hosting
+  environment is the cause; an unpinned temperature can make "the same
+  input" produce very different output lengths on repeated real calls,
+  and output length is what actually drives duration for a non-streaming
+  call.
+- `src/pipeline/prompt.js`'s `buildMessages` setting `temperature: 0`
+  correctly was not, by itself, evidence the live call also did: it is
+  never the live call path. When auditing a hand-synced pair for drift,
+  check the copy that actually deploys and runs, not the one that reads
+  as the source of truth by convention.
+- `scripts/check-prompt-sync.mjs` does not check model-call parameter
+  parity (`temperature`, `max_tokens`, model id) between the two
+  `client.messages.create` call sites, only the system-prompt text and
+  `contracts.js`'s behavior. This is a known, real gap, not solved here;
+  do not assume a clean `check-prompt-sync` run means the two live call
+  constructions are fully equivalent.
+
 ## 2026-07-14: Phase-level timing added to /structure; memory bumped to 512MiB to test CPU throttling, per an Anthropic Workbench comparison that ruled out the model call itself
 
 Follow-up to the two entries below (the `timeoutSeconds: 120` fix and its
