@@ -127,9 +127,10 @@ an oversight.
 Written by `POST /api/todoist/oauth` on a successful token exchange,
 refreshed in place by `POST /api/todoist/write` when the stored token is
 expired or within a minute of it, and deleted by `POST /api/todoist/disconnect`.
-Denied to every client read and write in `firestore.rules`, the same
-treatment `structureTraces` gets below, but a distinct case for a distinct
-reason: personal task text gets client-side encryption
+Denied to every client read and write in `firestore.rules`. `structureTraces`
+below is no longer denied to a client read the same way, since the
+async-Structure pass (docs/resolution-log.md); `todoistAuth` still is, a
+distinct case for a distinct reason: personal task text gets client-side encryption
 (`src/lib/crypto.js`) before it ever reaches Firestore, so the server never
 needs the plaintext. A Todoist access token can't get that treatment; the
 Function has to read it in plaintext to call Todoist on the user's behalf.
@@ -140,7 +141,18 @@ entry.
 `users/{uid}/structureTraces/{traceId}`
 - `transcript`: string (the raw dump submitted to Structure)
 - `existingProjectIds`: string[] (ids only, no names)
-- `model`: string (the Anthropic model id the call actually used)
+- `status`: `"processing" | "done" | "failed"`. New as of the async-Structure
+  pass (docs/resolution-log.md): distinct from `outcome` below, which is the
+  user's own confirm/cancel decision, `status` is this job's own processing
+  state. Set to `"processing"` at creation time (`POST /api/structure`'s fast
+  enqueue write), flipped to `"done"` or `"failed"` by `processStructureTrace`
+  (`functions/index.js`, an `onDocumentCreated` trigger on this same
+  collection) once the real model call finishes. The client
+  (`SuperRambleModal.jsx`) subscribes to this document via Firestore
+  `onSnapshot` and resolves once `status` leaves `"processing"`.
+- `model`: string (the Anthropic model id the call actually used; absent
+  until `processStructureTrace` finishes, since only it knows which model
+  answered)
 - `priorErrors`: string[] | null (set only on the one corrective retry)
 - `stopReason`: string | null
 - `response`: object | null (the parsed structuring response; `null` on any
@@ -185,35 +197,64 @@ entry.
   section and the resolution log's editable-preview entry.
 - `traceWriteFailed`: boolean, present and `true` only on a fallback marker
   (see below); absent on every normal trace document
-- `errorCode`, `errorMessage`: string | null, present only alongside
-  `traceWriteFailed: true`; the Firestore error from the primary write
-  attempt, so a write failure is diagnosable from the trace collection
-  itself, not just Cloud Logging
+- `errorCode`, `errorMessage`: string | null. `errorCode` is only ever set
+  alongside `traceWriteFailed: true` (the Firestore error from the enqueue
+  write itself failing). `errorMessage` has two distinct sources as of the
+  async-Structure pass: the same `traceWriteFailed` case, or
+  `processStructureTrace` setting a plain, user-facing string when
+  `status` is `"failed"` (the model declined, `max_tokens` truncation,
+  invalid JSON, or the model call itself throwing) so the client's
+  `onSnapshot` listener has something real to reject with.
 
-Written once per real Structure call, in production too, not gated behind a
-debug flag: a full trace on success or an ordinary failure (refusal,
-truncation, malformed JSON), or, if that write itself fails, a minimal
-`traceWriteFailed` marker instead (no `transcript` or `response`, just
-`ok: false`, `traceWriteFailed: true`, `errorCode`, `errorMessage`, and the
-usual `createdAt`/`outcome`/`outcomeAt`). Never total silence: a 2026-07-08
+Creation is now a two-phase write, not one, as of the async-Structure pass
+(docs/resolution-log.md): `POST /api/structure` writes a fast, minimal
+document (`transcript`, `existingProjectIds`, `priorErrors`, `status:
+"processing"`, `createdAt`, `outcome: "pending"`, `outcomeAt: null`) and
+responds immediately with `{ traceId }`, well under any timeout; every other
+field above is filled in later by `processStructureTrace`, an
+`onDocumentCreated` trigger on this same collection, once the real model
+call finishes. This split exists because the old single synchronous write
+(full trace, made only after the model call already returned) could not
+survive a genuinely slow Structure call: docs/resolution-log.md's 2026-07-14
+entries found real calls taking 91-98s, well inside this Function's own
+120s `timeoutSeconds`, still failing with a bare `502` because Firebase
+Hosting's `/api/**` rewrite proxy (or a layer in front of it) cuts the
+connection around 90-100s regardless. The enqueue write itself can still
+fail; unlike the old single write, nothing has been billed yet at that
+point, so this case gets a plain error back to the caller, not a fallback
+marker (see `createProcessingTrace`, `functions/index.js`). The *later*
+write, from `processStructureTrace` once the model call has already been
+billed, is the one that still needs the old fallback reasoning: if that
+write itself fails, there is no separate fallback document (this write
+targets a document that already exists), so it logs every diagnostic detail
+directly to Cloud Logging instead, the same "nothing else will ever record
+that this call happened" posture the original fallback used, now applied to
+a different write site. A `traceWriteFailed` marker (no `transcript` or
+`response`, just `ok: false`, `traceWriteFailed: true`, `errorCode`,
+`errorMessage`, and the usual `createdAt`/`outcome`/`outcomeAt`) is therefore
+still possible, but now only from the enqueue write's own failure, not from
+the model-call write's failure the way it originally was: a 2026-07-08
 review found real production calls that were billed in `llmUsage` but had no
-matching `structureTraces` document at all, since the prior version of this
+matching `structureTraces` document at all, since the prior version of that
 write's catch block only logged to Cloud Logging and returned `null`. See
 the resolution log entry dated 2026-07-08 for the finding and the fallback
-this added. `outcome` and `outcomeAt` are filled in later by
+this originally added. `outcome` and `outcomeAt` are filled in later by
 `POST /api/structure/outcome` when the user confirms, confirms with edits,
 or cancels the proposal (a `traceWriteFailed` marker never gets a real
 outcome, since there was never a proposal shown for it either: the original
-request still returned its normal response or error to the caller). Denied
-to every client
-read and write in `firestore.rules`; only the Function (Admin SDK) and the
-local `scripts/list-traces.mjs` / `scripts/promote-trace.mjs` (also Admin
-SDK, which bypasses rules) ever touch it. `list-traces.mjs` shows a
-`traceWriteFailed` marker plainly instead of a blank transcript;
-`promote-trace.mjs` refuses to promote one outright, since there is nothing
-to promote. See `docs/llm-pipeline.md` and the resolution log entry dated
-2026-07-07 for what this is for and why it reopens an earlier privacy
-stance.
+request still returned its normal response or error to the caller). Write is
+denied to every client in `firestore.rules`, owner included: only the
+Function (Admin SDK, both the enqueue write and `processStructureTrace`) and
+the local `scripts/list-traces.mjs` / `scripts/promote-trace.mjs` (also
+Admin SDK, which bypasses rules) ever write here. Read is now allowed to the
+owner (`allow read: if isOwner(uid)`), a change from full denial, added in
+the same pass so the client can `onSnapshot` its own trace document
+(`SuperRambleModal.jsx`) to learn when `processStructureTrace` finishes.
+`list-traces.mjs` shows a `traceWriteFailed` marker plainly instead of a
+blank transcript; `promote-trace.mjs` refuses to promote one outright, since
+there is nothing to promote. See `docs/llm-pipeline.md` and the resolution
+log entry dated 2026-07-07 for what this is for and why it reopens an
+earlier privacy stance.
 
 `referenceExamples/{exampleId}` (top-level, not nested under `users/{uid}`:
 a reference example teaches the live model on every future call regardless
@@ -536,6 +577,20 @@ phase-level breakdown from live testing, not a guess: whether 512MiB
 closes the gap, and if not, where the phase timings show the time
 actually going.
 
+**This whole "closing this fully needs..." problem is superseded, not
+solved via the diagnostic named above.** The async-Structure pass
+(docs/resolution-log.md) sidesteps the Hosting-cutoff question entirely
+instead of answering it: `POST /api/structure` no longer holds a long-lived
+HTTP request open for a slow model call at all, so there is nothing left
+for Hosting's rewrite (or whatever sits in front of it) to cut off around
+90-100s. The real work moved to `processStructureTrace`, an
+`onDocumentCreated` trigger invoked directly by Eventarc, never through the
+Hosting rewrite; see "Background triggers" below for its own contract. The
+direct-Cloud-Run-URL diagnostic (`scripts/diagnose-hosting-cutoff.mjs`) is
+still real, standalone follow-up work for confirming exactly which upstream
+layer was responsible, if that is ever still worth knowing, but it is no
+longer a blocker for the user-facing bug this section originally described.
+
 `/api/todoist/oauth` and `/api/todoist/write` are real as of phase 3, part 8
 (the "The Todoist client" section above has the full detail: OAuth exchange,
 refresh, the batched Sync API write, the priority-direction and due-string
@@ -575,23 +630,59 @@ production.
 
 ### Background triggers
 
-`functions/index.js` exports one Firestore trigger alongside the HTTP
-endpoints above: `gradeStructureTrace`, `onDocumentWritten` on
-`users/{uid}/structureTraces/{traceId}`. Never runs as part of a live user
-request; it fires asynchronously, after `POST /api/structure/outcome` has
-already responded to the client. Guarded against retriggering on its own
-write (it checks `judgedAt` is not already set before doing anything, the
-same field its own write sets, so the write that grades a trace produces a
-second invocation that immediately no-ops rather than a loop). Grades on
-this app's default Haiku model, never Sonnet, the same model rule
-`scripts/grade-traces.mjs` already followed as a manual script; when the
-outcome is `"confirmed_with_edits"` and the grader flags the original
-response, it also attempts to reconstruct the corrected tree from
-`response` plus `edits` and, if that reconstruction and a contract
-validation both succeed, writes it into `referenceExamples` automatically.
-See `docs/llm-pipeline.md`'s "Live capture and the eval flywheel" section
-for the full mechanism, including what makes reconstruction fail and why
-that is a real, known limitation, not an oversight.
+`functions/index.js` exports two Firestore triggers alongside the HTTP
+endpoints above, both on `users/{uid}/structureTraces/{traceId}`, neither
+ever running as part of a live user request:
+
+`processStructureTrace`, `onDocumentCreated` (not `onDocumentWritten`: a
+created-document trigger fires exactly once per document, so this
+trigger's own later write-back can never retrigger itself, unlike
+`gradeStructureTrace` below, which needs an explicit guard for that same
+reason). Fires the moment `POST /api/structure`'s fast enqueue write
+creates a new document with `status: "processing"`; does the real
+Structure work that write intentionally deferred (reconstructing
+`existingProjects` name+id pairs from `users/{uid}/projects` via Admin SDK,
+since the trace document itself only ever stores ids;
+`fetchReferenceExamples`; the actual `client.messages.create` call,
+unchanged in shape from what the synchronous path used to do inline;
+`logUsage` against the same `users/{uid}/llmUsage/{today}` document
+`checkAndReserveLimit` already reasons about), then merge-writes the result
+(`model`, `stopReason`, `response`, `rawText`, `responseId`,
+`contentBlocks`, `ok`, token/cost fields, `status: "done" | "failed"`, and
+`errorMessage` on failure). Guards a real race on that final write: `POST
+/api/structure/outcome` can land while this trigger is still mid-flight (the
+user can Discard while the waiting UI is still up,
+`SuperRambleModal.jsx`), so the final write re-reads the document
+immediately beforehand and only ever includes `outcome: "pending"` if
+nothing real has been decided yet, never stomping a real `"cancelled"` back
+to `"pending"`. `timeoutSeconds: 180` / `memory: '512MiB'`, reasoned from
+real Cloud Logging data (`scripts/structure-timing-stats.mjs`), not copied
+from `exports.api`'s own values: see the resolution log entry for the async-
+Structure pass. See "The /api Function contract" above for why this split
+exists at all (Firebase Hosting's rewrite proxy cutting off a genuinely slow
+synchronous call around 90-100s) and `docs/llm-pipeline.md` for the full
+Stage 2 contract this trigger fulfills.
+
+`gradeStructureTrace`, `onDocumentWritten`. Fires asynchronously, after
+`POST /api/structure/outcome` has already responded to the client. Guarded
+against retriggering on its own write (it checks `judgedAt` is not already
+set before doing anything, the same field its own write sets, so the write
+that grades a trace produces a second invocation that immediately no-ops
+rather than a loop). Grades on this app's default Haiku model, never
+Sonnet, the same model rule `scripts/grade-traces.mjs` already followed as
+a manual script; when the outcome is `"confirmed_with_edits"` and the
+grader flags the original response, it also attempts to reconstruct the
+corrected tree from `response` plus `edits` and, if that reconstruction and
+a contract validation both succeed, writes it into `referenceExamples`
+automatically. See `docs/llm-pipeline.md`'s "Live capture and the eval
+flywheel" section for the full mechanism, including what makes
+reconstruction fail and why that is a real, known limitation, not an
+oversight. Its own guard (`!afterData.outcome || afterData.outcome ===
+"pending"` returns early) already means it never grades a trace still
+mid-flight in `processStructureTrace`: `response` is absent until that
+trigger's own final write lands, so this trigger's `!afterData.response`
+guard defers grading regardless of which of the two triggers' writes landed
+first.
 
 ## Secrets
 

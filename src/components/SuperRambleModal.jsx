@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase.js';
 import { useData } from '../AppData.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { structureTranscript, ContractError } from '../pipeline/structure.js';
@@ -7,6 +9,26 @@ import { getAuthToken } from '../lib/authToken.js';
 import { createTodoistClient } from '../todoist/index.js';
 import TaskRow, { buildChildrenMap } from './TaskRow.jsx';
 import VoiceRecorder from './VoiceRecorder.jsx';
+
+// A few minutes, comfortably above processStructureTrace's own 180s
+// timeoutSeconds ceiling (functions/index.js, reasoned from real Cloud
+// Logging data, docs/resolution-log.md's async-Structure entry): this client
+// watchdog needs to outlast that server-side ceiling plus round-trip/cold-
+// start slack, not race it, so the server gets a real chance to write its
+// own explained failure first. Still a firm bound so the UI can never hang
+// forever on a stuck job (a trigger invocation that itself throws before
+// writing anything back, docs/architecture.md's structureTraces field list).
+const STRUCTURE_WAIT_TIMEOUT_MS = 240_000;
+
+// Real percentiles from scripts/structure-timing-stats.mjs, run against
+// actual Cloud Logging history (docs/resolution-log.md's async-Structure
+// entry): p50 and p90 of totalMs across the 8 real calls logged so far.
+// Deliberately not rounded to a "nicer" number: these are the tool's real
+// output. Only 8 data points exist at the time this was written; re-run the
+// script and update these as real usage accumulates (docs/roadmap.md's
+// "Next" section already flags this).
+const STRUCTURE_P50_SECONDS = 82;
+const STRUCTURE_P90_SECONDS = 96;
 
 // TaskList itself was a poor fit for this preview: it hard-wires useData()
 // (real completeTask/deleteTask/openAdd/openTaskDetail, all calling the real
@@ -120,10 +142,25 @@ function LoadingTips() {
 // docs/llm-pipeline.md.
 export default function SuperRambleModal({ onClose }) {
   const { store, projects, inboxId, bump, flash, todoistConnected } = useData();
-  const { isLocal } = useAuth();
+  const { isLocal, user } = useAuth();
 
   const [text, setText] = useState('');
   const [state, setState] = useState('input'); // input | recording | loading | preview | error
+  // Set once callModel's enqueue POST returns a traceId, cleared once that
+  // attempt resolves one way or another (a retry, docs/pipeline's one
+  // corrective retry, gets a fresh traceId and restarts this). Drives the
+  // waiting UI (elapsed timer, real-percentile copy, a Cancel affordance)
+  // during the 'loading' state, and is what makes closing the modal mid-wait
+  // possible at all: without a traceId there is nothing yet to mark
+  // cancelled.
+  const [waitingTraceId, setWaitingTraceId] = useState(null);
+  const [waitingElapsedSec, setWaitingElapsedSec] = useState(0);
+  // Holds the current Firestore onSnapshot unsubscribe function while a
+  // callModel attempt is in flight, so the component's own unmount cleanup
+  // below can stop that listener if the user closes the modal mid-wait
+  // (recordOutcome + onClose, in the loading render), rather than leaving it
+  // subscribed until the trace naturally resolves or the watchdog fires.
+  const unsubscribeTraceRef = useRef(null);
   const [structured, setStructured] = useState(null);
   // `edited` is the working copy the preview actually renders and Confirm
   // actually writes: a deep clone of `structured`, seeded once per proposal,
@@ -151,13 +188,60 @@ export default function SuperRambleModal({ onClose }) {
   const traceIdRef = useRef(null);
   const [traceId, setTraceId] = useState(null);
 
+  // A traceId means there is now something real to mark cancelled, so
+  // closing mid-wait is allowed from that point on (recordOutcome below);
+  // before that (the brief enqueue POST itself, well under a second per
+  // Phase 1's real timing data) there is nothing to cancel yet, and 'loading'
+  // stays non-closable exactly as it always was.
+  const canCloseWhileWaiting = state === 'loading' && Boolean(waitingTraceId);
+
   useEffect(() => {
     function onKey(e) {
-      if (e.key === 'Escape' && state !== 'loading' && state !== 'recording' && !confirming) onClose();
+      if (e.key === 'Escape' && !confirming) {
+        if (state !== 'loading' && state !== 'recording') onClose();
+        else if (canCloseWhileWaiting) cancelWaiting();
+      }
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, state, confirming]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, state, confirming, canCloseWhileWaiting]);
+
+  // Ticks once a second while a callModel attempt is in flight, purely for
+  // display (docs/roadmap.md's real-percentile copy below): the actual
+  // resolution comes from the onSnapshot listener inside callModel, never
+  // from this timer. Resets to 0 whenever waitingTraceId changes (a fresh
+  // attempt, including structureTranscript's one corrective retry, starts
+  // its own fresh wait).
+  useEffect(() => {
+    if (!waitingTraceId) {
+      setWaitingElapsedSec(0);
+      return undefined;
+    }
+    setWaitingElapsedSec(0);
+    const id = setInterval(() => setWaitingElapsedSec((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [waitingTraceId]);
+
+  // Stops a dangling Firestore listener if the modal unmounts while a
+  // callModel attempt is still waiting (Cancel below, or any other
+  // unmount): without this, the listener set up inside callModel would keep
+  // running until the trace naturally resolves or the watchdog fires, then
+  // try to resolve/reject a promise whose continuation touches state on an
+  // unmounted component.
+  useEffect(() => {
+    return () => unsubscribeTraceRef.current?.();
+  }, []);
+
+  // Discards the in-flight proposal while still waiting: records the
+  // cancellation on the trace callModel is currently watching (the exact
+  // outcome-race case processStructureTrace's own final write guards
+  // against, functions/index.js) and closes. Mirrors the Discard button's
+  // existing behavior in the 'preview' state exactly.
+  function cancelWaiting() {
+    recordOutcome(waitingTraceId, 'cancelled');
+    onClose();
+  }
 
   const canSubmit = text.trim().length > 0 && state !== 'loading';
 
@@ -184,6 +268,16 @@ export default function SuperRambleModal({ onClose }) {
     });
   }
 
+  // POST /api/structure now only ever enqueues (functions/index.js,
+  // docs/resolution-log.md's async-Structure pass): it responds with a bare
+  // { traceId } almost immediately, well before the real model call even
+  // starts. The actual result lands asynchronously on that same trace
+  // document once processStructureTrace (a Firestore trigger) finishes, so
+  // this subscribes via onSnapshot instead of awaiting a second HTTP
+  // response: there is no long-lived request left for Firebase Hosting's
+  // rewrite proxy to cut off around 90-100s (the original bug,
+  // docs/resolution-log.md, 2026-07-14), because there is no long-lived
+  // request at all.
   async function callModel({ transcript, existingProjects, priorErrors }) {
     const token = await getAuthToken(isLocal);
     const res = await fetch('/api/structure', {
@@ -199,8 +293,43 @@ export default function SuperRambleModal({ onClose }) {
       throw new Error(body.error || `Request failed (${res.status}).`);
     }
     const body = await res.json();
-    traceIdRef.current = body.traceId ?? null;
-    return body.structured;
+    const id = body.traceId ?? null;
+    traceIdRef.current = id;
+    if (!id) {
+      throw new Error('Could not start structuring. Try again.');
+    }
+    setWaitingTraceId(id);
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+
+      function finish(fn, value) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        unsubscribe();
+        unsubscribeTraceRef.current = null;
+        setWaitingTraceId(null);
+        fn(value);
+      }
+
+      const timeoutId = setTimeout(() => {
+        finish(reject, new Error('Structuring is taking longer than expected. Try again in a moment.'));
+      }, STRUCTURE_WAIT_TIMEOUT_MS);
+
+      const unsubscribe = onSnapshot(
+        doc(db, 'users', user.uid, 'structureTraces', id),
+        (snap) => {
+          if (!snap.exists()) return;
+          const data = snap.data();
+          if (data.status === 'done') finish(resolve, data.response);
+          else if (data.status === 'failed') finish(reject, new Error(data.errorMessage || 'Structuring failed. Try again.'));
+          // status === 'processing': keep waiting.
+        },
+        (err) => finish(reject, new Error(err.message || 'Lost connection while waiting for the result.'))
+      );
+      unsubscribeTraceRef.current = unsubscribe;
+    });
   }
 
   // Best-effort telemetry: records the user's own confirmed/cancelled/
@@ -372,7 +501,11 @@ export default function SuperRambleModal({ onClose }) {
   return (
     <div
       className="overlay"
-      onMouseDown={(e) => e.target === e.currentTarget && state !== 'loading' && state !== 'recording' && onClose()}
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (state !== 'loading' && state !== 'recording') onClose();
+        else if (canCloseWhileWaiting) cancelWaiting();
+      }}
     >
       <div className="modal modal-super-ramble" role="dialog" aria-label="Super Ramble">
         {state === 'input' || state === 'recording' ? (
@@ -420,10 +553,29 @@ export default function SuperRambleModal({ onClose }) {
         ) : null}
 
         {state === 'loading' ? (
-          <div className="modal-body sr-body">
-            <p className="sr-loading">Turning what you said into tasks.</p>
-            <LoadingTips />
-          </div>
+          <>
+            <div className="modal-body sr-body">
+              <p className="sr-loading">Turning what you said into tasks.</p>
+              {waitingTraceId ? (
+                <>
+                  <p className="sr-loading-estimate">
+                    Usually under {STRUCTURE_P50_SECONDS}s, can take up to {STRUCTURE_P90_SECONDS}s for a complex dump.
+                  </p>
+                  <p className="sr-loading-elapsed">{waitingElapsedSec}s elapsed</p>
+                </>
+              ) : null}
+              <LoadingTips />
+            </div>
+            {canCloseWhileWaiting ? (
+              <div className="modal-footer">
+                <div className="right">
+                  <button type="button" className="btn btn-ghost" onClick={cancelWaiting}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </>
         ) : null}
 
         {state === 'error' ? (

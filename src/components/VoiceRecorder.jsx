@@ -58,6 +58,15 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  // A live counter, not a fixed estimate: unlike Structure
+  // (scripts/structure-timing-stats.mjs, SuperRambleModal.jsx), there is no
+  // historical timing data for /api/transcribe yet. functions/index.js's
+  // own "transcribe phase timings" log line (docs/resolution-log.md's
+  // async-Structure entry) only started recording real calls from that
+  // pass forward, so there is nothing to compute a percentile from today;
+  // this just ticks up so a wait of more than a couple seconds still reads
+  // as active progress, not a frozen screen.
+  const [transcribingSeconds, setTranscribingSeconds] = useState(0);
   const [level, setLevel] = useState(0);
   const [message, setMessage] = useState(null);
 
@@ -69,6 +78,7 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
   const analyserRef = useRef(null);
   const rafRef = useRef(null);
   const intervalRef = useRef(null);
+  const transcribingIntervalRef = useRef(null);
   const secondsRef = useRef(0);
   const onActiveChangeRef = useRef(onActiveChange);
   onActiveChangeRef.current = onActiveChange;
@@ -90,8 +100,10 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
   function cleanup() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     if (intervalRef.current) clearInterval(intervalRef.current);
+    if (transcribingIntervalRef.current) clearInterval(transcribingIntervalRef.current);
     rafRef.current = null;
     intervalRef.current = null;
+    transcribingIntervalRef.current = null;
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -196,6 +208,8 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
       }
 
       setTranscribing(true);
+      setTranscribingSeconds(0);
+      transcribingIntervalRef.current = setInterval(() => setTranscribingSeconds((s) => s + 1), 1000);
       try {
         const audioBase64 = await blobToBase64(blob);
         const token = await getAuthToken();
@@ -221,6 +235,8 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
       } catch (err) {
         setMessage(err.message || 'Could not transcribe that recording.');
       } finally {
+        if (transcribingIntervalRef.current) clearInterval(transcribingIntervalRef.current);
+        transcribingIntervalRef.current = null;
         setTranscribing(false);
       }
     } finally {
@@ -259,6 +275,7 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
           <>
             <div className="voice-full-ring voice-full-ring-pulse" />
             <p className="voice-full-status">Transcribing what you said.</p>
+            <p className="voice-full-status-elapsed">{formatTimer(transcribingSeconds)}</p>
           </>
         ) : (
           <>

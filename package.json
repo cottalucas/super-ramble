@@ -16,6 +16,8 @@
     "check:prompt-sync": "node scripts/check-prompt-sync.mjs",
     "eval:live": "node scripts/eval-live.mjs",
     "diagnose:hosting-cutoff": "node scripts/diagnose-hosting-cutoff.mjs",
+    "structure:timing-stats": "node scripts/structure-timing-stats.mjs",
+    "test:structure-emulator": "node scripts/structure-emulator-test.mjs",
     "trace:summary": "node scripts/trace-summary.mjs",
     "traces:list": "node scripts/list-traces.mjs",
     "traces:promote": "node scripts/promote-trace.mjs",
