@@ -163,11 +163,21 @@ it lands.
   retry on failure, the errors appended to the prompt; a second failure fails
   closed, before it can reach Write. See the resolution log entry dated
   2026-07-06.
-- Runs on Claude Sonnet, temperature 0. A deliberate, named exception to every
-  other model call's Haiku default: docs/brief.md's "the structure has to be
-  genuinely good" constraint makes structuring quality worth the extra cost.
-  Every other call in this app stays on Haiku. See the resolution log entry
-  dated 2026-07-06 for the model id and the cost math behind the daily limits.
+- Runs on Claude Sonnet. A deliberate, named exception to every other model
+  call's Haiku default: docs/brief.md's "the structure has to be genuinely
+  good" constraint makes structuring quality worth the extra cost. Every
+  other call in this app stays on Haiku. See the resolution log entry dated
+  2026-07-06 for the model id and the cost math behind the daily limits.
+  **Not temperature 0.** This line said "temperature 0" from 2026-07-06
+  until a live incident on 2026-07-14 proved it false: the pinned model,
+  `claude-sonnet-5`, rejects `temperature` outright (a live `400`,
+  `"temperature" is deprecated for this model"`), so the real live call has
+  never set it and cannot without breaking every request. See the
+  resolution log entry dated 2026-07-14 for what was actually tried, why it
+  broke production within a minute of deploy, and how fast it was reverted.
+  Do not reintroduce `temperature` on this call without first confirming,
+  against a real request to `claude-sonnet-5` specifically (Workbench, not
+  production), that it is accepted.
 
 ### Reference examples
 

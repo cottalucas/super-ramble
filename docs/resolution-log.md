@@ -3,6 +3,113 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-14: Incident: temperature: 0 broke every real /structure call within a minute of deploy. Reverted; the original complex-transcript 502 is still open
+
+The entry directly below diagnosed a real 502 pattern correctly but shipped
+the wrong fix, and that fix broke production. This entry is the honest
+account, not a quiet correction folded into the entry it corrects: the
+prior entry stays exactly as written, since it recorded what was known and
+done at the time, and this entry records what happened next.
+
+**What was deployed and what happened.** `temperature: 0` was added to
+`functions/index.js`'s live `/structure` call (the entry below) and
+deployed. Within about a minute, a real live test against the deployed
+site returned "Request failed (internal error)," not the `502` pattern
+this whole investigation had been chasing, a different, worse failure
+mode: every single `/structure` call now failed immediately, short
+transcripts included, not just complex ones. Pulled the real Cloud Run
+stderr log for the exact request: `BadRequestError: 400
+{"type":"error","error":{"type":"invalid_request_error","message":"\`temperature\`
+is deprecated for this model."}}`. `claude-sonnet-5`, the pinned model
+this call has used since phase 3 part 1, rejects `temperature` outright at
+the API level. This was not caught before deploy because nothing in this
+pass, or in `docs/llm-pipeline.md`'s standing "temperature 0" claim, or in
+`src/pipeline/prompt.js`'s own `buildMessages` (which has set
+`temperature: 0` since that same original pass), was ever actually
+exercised against the real API with the real pinned model id. The
+documented architecture was wrong, and had been wrong since whenever it
+was first written or the model was later repinned to `claude-sonnet-5`
+without re-verifying this claim; nothing before this incident ever made a
+real call that would have surfaced it, since the live call never set the
+parameter and `buildMessages` is never the live call path.
+
+**Reverted within minutes.** `functions/index.js`'s `/structure` call no
+longer sets `temperature` at all, back to the exact shape it had before
+the entry below. Deployed directly and immediately once the cause was
+confirmed, ahead of the normal branch/PR/CI flow this repo otherwise
+always uses: this was active, ongoing user-facing breakage of every real
+`/structure` call, not a case where pausing for review was the safer
+choice. Verified the revert actually fixed the immediate breakage before
+doing anything else: a real live call afterward returned to the
+pre-existing `502` pattern (95.35s Cloud Run-reported latency), not
+"internal error," confirming production is back to the state the entry
+below found it in, not further broken and not newly fixed either. This
+entry, the code, and the doc corrections below were committed to a normal
+branch and PR after the fact, to bring source control back in sync with
+what was already live; see the "Decisions not to relitigate" section
+below for why this order was chosen deliberately, not a shortcut taken
+carelessly.
+
+**Docs corrected, not left stale.** `docs/llm-pipeline.md`'s "temperature
+0" line is corrected in this pass to state plainly that it is false for
+the pinned model, with the incident referenced directly, rather than
+silently deleted (a future reader asking "why doesn't this call set
+temperature" deserves the answer, not silence). `src/pipeline/prompt.js`'s
+`buildMessages` had its own stale `temperature: 0` removed too, brought
+back into agreement with the live call's actual shape, even though it has
+no real caller; leaving a hand-synced copy confidently wrong, next to a
+doc that agreed with it, is exactly the setup that let this ship in the
+first place.
+
+**The original bug (docs/resolution-log.md, the entry below) is still
+open.** The diagnosis in that entry (an unpinned temperature letting a
+complex transcript occasionally sample a very long completion, and
+generating that many tokens taking long enough to hit an upstream
+timeout) is very likely still correct as a mechanism, but `temperature: 0`
+is not an available remedy for `claude-sonnet-5`. No further fix was
+attempted in this pass. The next real step needs to establish, against a
+real request to `claude-sonnet-5` specifically (Workbench, not
+production, given what just happened), what sampling or determinism
+controls this model actually accepts, if any, before writing any code
+that touches the live call again.
+
+**Verified:** `npm run build` clean. `npm run eval` 67/67, unaffected
+(this pass only removes a parameter and corrects two doc/comment blocks).
+`node scripts/check-secrets.mjs` clean. `node --check functions/index.js`
+clean. Live: the revert confirmed deployed (`api-00020-mok`), and a real
+call afterward returned to the pre-existing `502`/~95s pattern rather than
+the incident's "internal error," confirming the emergency fix actually
+worked before anything else was touched.
+
+### Decisions not to relitigate
+
+- `claude-sonnet-5` rejects `temperature` outright (a real, live `400`,
+  not a guess). Do not set `temperature` on this call again without first
+  confirming against a real request to this exact model id, outside
+  production, that the parameter is accepted.
+- A doc or a hand-synced code comment stating a model-call parameter is
+  set a certain way is not proof the live call actually sets it that way.
+  This entry exists because a stale, never-live-verified claim
+  (`docs/llm-pipeline.md`'s "temperature 0") was trusted as settled
+  architecture instead of checked against what `functions/index.js`
+  actually sends. Before changing a live model-call parameter based on
+  what a doc says, verify the doc's claim is still true for the pinned
+  model in use today, not just internally consistent with itself.
+- Deploying an emergency revert directly, ahead of the normal branch/PR/CI
+  flow, was the right call here specifically because the alternative was
+  leaving a confirmed, active, 100%-failure-rate regression live for
+  however long a PR review and CI run would have taken. This is not a
+  general license to skip the normal flow; it applies to reverting a
+  change that is actively breaking production right now, confirmed, not
+  suspected. The normal flow (branch, PR, CI, merge) still happened
+  immediately after, to keep source control honest about what is actually
+  deployed.
+- The original complex-transcript `502` is not resolved. Do not treat this
+  entry, or the revert it documents, as having fixed the user-reported
+  bug; it only stopped a worse regression this pass introduced while
+  trying to fix it. Re-open with real, pre-verified findings before
+  attempting another fix.
+
 ## 2026-07-14: The complex-transcript 502 root-caused: a missing temperature: 0 on the live Structure call, not infra. The full arc, across four passes
 
 A real user-reported bug ("small text works fine, long text gets a bare
