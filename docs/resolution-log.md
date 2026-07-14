@@ -3,6 +3,83 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-14: Phase-level timing added to /structure; memory bumped to 512MiB to test CPU throttling, per an Anthropic Workbench comparison that ruled out the model call itself
+
+Follow-up to the two entries below (the `timeoutSeconds: 120` fix and its
+live-verification correction). Neither `timeoutSeconds: 120` nor
+`max_tokens: 8192` is touched in this pass; both stay exactly as those
+prior passes left them. This is a narrower, separate investigation into
+where the ~90-98s a real `/structure` call takes on the deployed site is
+actually being spent.
+
+**The decisive evidence that reframed this investigation came from outside
+this repo.** An Anthropic Workbench call using the exact same system
+prompt this Function builds (`STRUCTURE_SYSTEM_PROMPT_RULES` plus the live
+`referenceExamples` pool, printed and pasted in directly, not retyped from
+memory), the exact same `STRUCTURE_JSON_SCHEMA`, the exact same complex
+test transcript, `claude-sonnet-5`, `max_tokens: 8192`, finished in **9.5
+seconds** (`stop_reason: "end_turn"`, 4.1K input tokens, 796 output
+tokens). The same request through the deployed Function took 91-98
+seconds across three live attempts before an upstream layer returned a
+`502` (the entry below). A ~10x gap between those two numbers, with every
+model-facing input held identical, rules out the model call itself as the
+bottleneck. The time is being spent somewhere inside this Function's own
+execution: a cold start, one of the four real async operations in the
+`/structure` path (`checkAndReserveLimit`, `fetchReferenceExamples`,
+`logUsage`, `logStructureTrace`), or CPU throttling from `256MiB`,
+firebase-functions v2's unconfigured memory default, already found and
+logged as a real gap alongside the `timeoutSeconds` finding two entries
+below.
+
+**What shipped.** `functions/index.js`'s `/structure` handler now times
+each of those four phases with `Date.now()` and logs the full breakdown
+unconditionally to Cloud Logging the moment a call reaches the point where
+`logStructureTrace` has finished (`console.log('structure phase timings',
+{ uid, traceId, totalMs, checkAndReserveLimit, fetchReferenceExamples,
+modelCall, logUsage, logStructureTrace })`), not gated behind
+`STORE_RAW_TRACES`: this needs to be visible on every real call going
+forward, not just a local debug run, since the whole point is watching
+what a real deployed call does that a Workbench call cannot reproduce.
+Separately, `exports.api`'s config now also sets `memory: '512MiB'`
+alongside the existing `timeoutSeconds: 120`, a first, moderate test of
+the CPU-throttling theory specifically, chosen as a deliberate doubling of
+the 256MiB default rather than a final number: the phase timings above are
+what actually confirm or rule this out, not the choice of 512MiB itself.
+
+**Verified before deploy:** `npm run build` clean, asset hash unchanged
+from what's already live (this change touches only `functions/index.js`'s
+handler internals and Function config, nothing under `src/`, so no hosting
+redeploy is needed, only `functions`). `npm run eval` 67/67, unaffected by
+this change since it adds only timing/config code around existing calls,
+no behavior change to anything the offline suite exercises. `node
+scripts/check-secrets.mjs` clean. `node --check functions/index.js`
+clean.
+
+**Not yet known:** whether 512MiB actually closes the gap, or where the
+phase timings show the time going if it doesn't. Live verification (two
+real calls in immediate succession against the deployed site, to separate
+one-time cold-start cost from steady-state per-request cost, per this
+task's own instruction) is logged in a follow-up entry once merged and
+deployed, with the actual phase-by-phase numbers, not a restatement of
+"faster" or "not faster."
+
+### Decisions not to relitigate
+
+- `timeoutSeconds: 120` and `max_tokens: 8192` are unrelated to this
+  investigation and are not touched here. Do not re-open either while
+  chasing this separate CPU/memory question.
+- A Workbench call and a deployed Function call using byte-identical model
+  inputs (system prompt, schema, transcript, model id, `max_tokens`) but
+  wildly different wall-clock time is strong evidence the gap is inside
+  the Function's own execution, not the model. Trust this kind of
+  controlled, identical-input comparison over guessing at Cloud Function
+  overhead in the abstract.
+- 512MiB is a first test value, not a considered final number. If this
+  pass's live phase timings show it did not close the gap, do not
+  immediately try a second, larger memory value blind; read what the
+  phase timings actually show first, per this task's own explicit
+  instruction.
+
 ## 2026-07-14: PR #7 merged and deployed; live testing found the real upstream cutoff is ~90-100s, not the 60s the entry below assumed, and corrects it
 
 Follow-up to the entry directly below. `timeoutSeconds: 120` merged

@@ -508,8 +508,20 @@ async function logStructureTrace(uid, data) {
 // needs (most likely calling this function's own Cloud Run URL directly for
 // the /structure route, bypassing the Hosting rewrite's cap entirely, with
 // its own CORS and client changes) and why it is out of scope here.
+// 512MiB, not the unconfigured firebase-functions v2 default (256MiB): live
+// testing after the timeoutSeconds fix above found real /structure calls
+// against the deployed site taking 91-98s, while the exact same system
+// prompt, schema, and transcript against the Anthropic Workbench directly
+// finished in ~10s (docs/resolution-log.md, this entry's date). That ~10x
+// gap has to be time spent inside this Function's own execution, not the
+// model call; a too-small memory allocation throttles CPU proportionally in
+// Cloud Run, and 256MiB is a tight budget for a Node process holding both
+// the Firebase Admin SDK and the Anthropic SDK. 512MiB is a first, moderate
+// test of that theory, not a final number: the phase-level timing logged
+// below (`structure phase timings`) is what actually confirms or rules it
+// out, not a guess.
 exports.api = onRequest(
-  { secrets: [ANTHROPIC_API_KEY, TODOIST_CLIENT_SECRET, GROQ_API_KEY], cors: false, timeoutSeconds: 120 },
+  { secrets: [ANTHROPIC_API_KEY, TODOIST_CLIENT_SECRET, GROQ_API_KEY], cors: false, timeoutSeconds: 120, memory: '512MiB' },
   async (req, res) => {
     const user = await verifyAuth(req);
     if (!user) {
@@ -616,7 +628,23 @@ exports.api = onRequest(
       // cannot and drives the one corrective retry, resubmitting here with
       // priorErrors when it does.
       if (endsWithPath(req, '/structure') && req.method === 'POST') {
+        // Phase-level timing, added to find out where a slow /structure call
+        // actually spends its time: a Workbench call with the exact same
+        // system prompt, schema, and transcript finished in ~10s, but the
+        // same request through this deployed Function took 91-98s across
+        // three real live attempts before an upstream layer 502'd it
+        // (docs/resolution-log.md, this entry's date). That ~10x gap can
+        // only be inside this handler's own execution (cold start, a
+        // Firestore round trip, memory-driven CPU throttling), not the model
+        // call itself. Logged unconditionally (not gated behind
+        // STORE_RAW_TRACES) so this is visible on every real call going
+        // forward, not just a local debug run.
+        const phaseStart = Date.now();
+        const phaseTimingsMs = {};
+
+        const limitStart = Date.now();
         const limit = await checkAndReserveLimit(user.uid);
+        phaseTimingsMs.checkAndReserveLimit = Date.now() - limitStart;
         if (!limit.allowed) {
           res.status(429).json({ error: limit.reason });
           return;
@@ -637,6 +665,7 @@ exports.api = onRequest(
         // exact prompt shape this app ran before reference examples existed
         // at all, not a failure.
         let referenceExamples = [];
+        const fetchExamplesStart = Date.now();
         try {
           referenceExamples = await fetchReferenceExamples();
         } catch (err) {
@@ -644,11 +673,13 @@ exports.api = onRequest(
             errorMessage: String(err?.message ?? err)
           });
         }
+        phaseTimingsMs.fetchReferenceExamples = Date.now() - fetchExamplesStart;
         const structureSystemPrompt = referenceExamples.length
           ? [STRUCTURE_SYSTEM_PROMPT_RULES, '', formatReferenceExamples(referenceExamples)].join('\n')
           : STRUCTURE_SYSTEM_PROMPT_RULES;
 
         const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });
+        const modelCallStart = Date.now();
         const response = await client.messages.create({
           // 8192, not 4096: a rich multi-section dump (several workstreams,
           // nested sub-tasks, a full reasoning string) hit the old 4096 cap
@@ -670,13 +701,16 @@ exports.api = onRequest(
           ],
           output_config: { format: { type: 'json_schema', schema: STRUCTURE_JSON_SCHEMA } }
         });
+        phaseTimingsMs.modelCall = Date.now() - modelCallStart;
 
         const inputTokens = response.usage?.input_tokens || 0;
         const outputTokens = response.usage?.output_tokens || 0;
         const costUsd =
           (inputTokens / 1_000_000) * STRUCTURE_INPUT_USD_PER_MTOK +
           (outputTokens / 1_000_000) * STRUCTURE_OUTPUT_USD_PER_MTOK;
+        const logUsageStart = Date.now();
         await logUsage(limit.ref, { costUsd, inputTokens, outputTokens });
+        phaseTimingsMs.logUsage = Date.now() - logUsageStart;
 
         const stopReason = response.stop_reason || null;
         const rawText = extractStructuredText(response.content);
@@ -698,6 +732,7 @@ exports.api = onRequest(
         }
 
         const existingProjectsArr = Array.isArray(existingProjects) ? existingProjects : [];
+        const logStructureTraceStart = Date.now();
         const traceId = await logStructureTrace(user.uid, {
           transcript,
           existingProjectIds: existingProjectsArr.map((p) => p.id),
@@ -721,6 +756,14 @@ exports.api = onRequest(
           inputTokens,
           outputTokens,
           costUsd
+        });
+        phaseTimingsMs.logStructureTrace = Date.now() - logStructureTraceStart;
+
+        console.log('structure phase timings', {
+          uid: user.uid,
+          traceId,
+          totalMs: Date.now() - phaseStart,
+          ...phaseTimingsMs
         });
 
         if (stopReason === 'refusal') {

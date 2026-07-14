@@ -513,6 +513,29 @@ front of it, with its own CORS and client changes); see the resolution log
 entries for the dates this was found, live-tested, and flagged, not
 solved.
 
+A follow-up narrowed where inside this Function the ~90-100s is actually
+going. An Anthropic Workbench call using the exact same system prompt
+(`STRUCTURE_SYSTEM_PROMPT_RULES` plus the live `referenceExamples` pool),
+the exact same `STRUCTURE_JSON_SCHEMA`, and the exact same complex test
+transcript finished in about 10 seconds, a ~10x gap against the 91-98s
+this Function took on the deployed site for the identical request. That
+rules out the model call itself as the bottleneck and points at time spent
+inside this Function's own execution instead: a cold start, a Firestore
+round trip (`checkAndReserveLimit`, `fetchReferenceExamples`, `logUsage`,
+`logStructureTrace`, all in the `/structure` path), or CPU throttling from
+too small a memory allocation, `256MiB`, firebase-functions v2's
+unconfigured default, discovered alongside the `timeoutSeconds` finding
+above. Two changes test this directly rather than guessing: the
+`/structure` handler now logs each of those four phases' own duration to
+Cloud Logging unconditionally (`console.log('structure phase timings', ...)`,
+not gated behind `STORE_RAW_TRACES`, so this is visible on every real call
+going forward), and `exports.api` now also sets `memory: '512MiB'`
+alongside `timeoutSeconds: 120`, a first, moderate test of the
+CPU-throttling theory. See the resolution log entry for the actual
+phase-level breakdown from live testing, not a guess: whether 512MiB
+closes the gap, and if not, where the phase timings show the time
+actually going.
+
 `/api/todoist/oauth` and `/api/todoist/write` are real as of phase 3, part 8
 (the "The Todoist client" section above has the full detail: OAuth exchange,
 refresh, the batched Sync API write, the priority-direction and due-string
