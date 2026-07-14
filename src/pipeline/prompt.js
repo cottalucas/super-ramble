@@ -79,7 +79,12 @@ export function buildUserPrompt({ transcript, existingProjects = [], priorErrors
 export function buildMessages(input) {
   return {
     system: SYSTEM_PROMPT,
-    temperature: 0,
+    // Not temperature: 0. This function has no real caller (the live call
+    // is functions/index.js's own copy, docs/resolution-log.md, 2026-07-06),
+    // so this stale temperature: 0 sat here undetected until a live incident
+    // on 2026-07-14 proved it wrong for the pinned model: claude-sonnet-5
+    // rejects temperature outright. See docs/llm-pipeline.md's Stage 2
+    // section before ever setting this again.
     messages: [{ role: 'user', content: buildUserPrompt(input) }]
   };
 }

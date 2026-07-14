@@ -688,28 +688,24 @@ exports.api = onRequest(
           // malformed response. See docs/resolution-log.md, 2026-07-07.
           model: ANTHROPIC_STRUCTURE_MODEL,
           max_tokens: 8192,
-          // temperature: 0 was missing here, the real root cause behind the
-          // 91-98s live 502s investigated across several prior passes
-          // (timeoutSeconds, memory, and phase timing all ruled out as the
-          // cause; see docs/resolution-log.md, this entry's date). This is
-          // the one call docs/llm-pipeline.md documents as running at
-          // temperature 0, and src/pipeline/prompt.js's buildMessages sets
-          // it correctly, but that function is never the live call path
-          // (Firebase Functions deploys only this file, not src/pipeline),
-          // so this copy silently ran at the Anthropic API's own default
-          // (1) instead the whole time. Phase-level timing on real deployed
-          // calls showed duration scales almost exactly with output token
-          // count (~60-90 tokens/sec, consistent with Sonnet's own real
-          // generation speed): an unpinned temperature let a complex
-          // transcript occasionally sample a much longer, more exploratory
-          // completion, sometimes running the full max_tokens: 8192 budget,
-          // and generating that many tokens simply takes long enough that
-          // an upstream layer (Hosting/GFE, docs/architecture.md) cuts the
-          // connection before it returns. A short transcript rarely hits
-          // this, since there is little room for a long completion
-          // regardless of temperature, which is exactly the "small text
-          // works, long text 502s" pattern reported live.
-          temperature: 0,
+          // NOT temperature: 0. Tried once (docs/resolution-log.md, this
+          // entry's date) as the fix for the 91-98s live 502s a prior
+          // investigation traced to an unpinned temperature letting a
+          // complex transcript occasionally sample a very long completion.
+          // That diagnosis of *why* long completions happened was correct,
+          // but the fix was wrong for this pinned model: claude-sonnet-5
+          // rejects `temperature` outright, a real live 400 confirmed
+          // seconds after deploy ("`temperature` is deprecated for this
+          // model"), turning every single /structure call, short or long,
+          // into an immediate failure, a strictly worse regression than the
+          // bug it was meant to fix. Reverted the same day. Do not re-add
+          // temperature to this call without first confirming, against
+          // Anthropic's own current API reference for claude-sonnet-5
+          // specifically, that the parameter is actually accepted; do not
+          // trust docs/llm-pipeline.md's "temperature 0" line or
+          // src/pipeline/prompt.js's buildMessages (never the live call
+          // path, so never actually exercised against the real API) as
+          // proof it is.
           system: structureSystemPrompt,
           messages: [
             {
