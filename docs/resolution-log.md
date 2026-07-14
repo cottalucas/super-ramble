@@ -3,6 +3,85 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-14: Diagnostic tool added for the direct-Cloud-Run-URL test; not run against prod in this pass
+
+The decisive remaining diagnostic named in the two entries below (calling
+this Function's direct Cloud Run URL,
+`https://api-5cvpktolta-uc.a.run.app/structure`, bypassing `firebase.json`'s
+`/api/**` -> `api` Hosting rewrite, to show whether Hosting's rewrite itself
+is the layer cutting connections around 90-100s) was attempted once and
+correctly blocked: it needed a live Firebase ID token, and extracting one
+from the browser's IndexedDB was never authorized. That block stands; this
+pass does not attempt to extract a credential either.
+
+Instead, added `scripts/diagnose-hosting-cutoff.mjs`, modeled on
+`scripts/eval-live.mjs`'s existing gating conventions, so the diagnostic is
+repeatable by whoever holds the standing credential (the user, from their
+own signed-in browser session):
+
+- Gated behind `DIAGNOSE_ALLOW_LIVE=true`, the same explicit-opt-in pattern
+  `EVAL_ALLOW_LIVE` already uses, since this spends real Anthropic credits
+  and hits the real deployed site.
+- Requires `FIREBASE_ID_TOKEN` in env; if missing, exits with the exact
+  steps to get one safely (sign into `super-ramble.web.app`, submit a real
+  transcript, copy the `authorization` header's value from the real
+  `/api/structure` request in DevTools Network, the same token
+  `src/lib/authToken.js`'s `getAuthToken` sends). Never attempts to obtain
+  the token any other way.
+- Sends one fixed, repeatable synthetic transcript (three storylines: a
+  Website Relaunch referencing a duplicate project name, a birthday party
+  with nested sub-tasks, a camping trip with nested sub-tasks, plus a
+  fourth unrelated loose task), comparable in complexity to the transcript
+  that reproduced this bug live, using the exact body shape
+  `SuperRambleModal.jsx`'s `callModel` sends
+  (`{ transcript, existingProjects, priorErrors: null }`) and the same
+  `authorization: Bearer <token>` header.
+- POSTs that transcript sequentially, never concurrently, first to the
+  direct Cloud Run URL, then to the Hosting-proxied `/api/structure`, so
+  Cloud Run's own request log and each call's timing stay unambiguous.
+- Records wall-clock duration, HTTP status, and response headers/body for
+  each, prints a side-by-side result, and prints a verdict: if the direct
+  call also cuts off (no response, or a non-JSON body substituted in place
+  of this Function's own real response), Hosting's rewrite is not the
+  culprit; if the direct call completes with this Function's own real JSON
+  response (a success or its own explained truncation error), Hosting's
+  rewrite is confirmed as the bottleneck.
+- Added `"diagnose:hosting-cutoff": "node scripts/diagnose-hosting-cutoff.mjs"`
+  to `package.json`.
+
+**Verified:** `npm run build` clean, `npm run eval` clean (67/67 across the
+offline/date/todoist/write suites plus prompt-sync), `node
+scripts/check-secrets.mjs` clean, `node --check
+scripts/diagnose-hosting-cutoff.mjs` clean. Ran the script directly with
+neither env var set, and again with only `DIAGNOSE_ALLOW_LIVE=true` set:
+both exits are clean, print the expected gating message (the second printing
+the full manual-token-retrieval instructions), and neither makes any network
+call. Did not run it against prod with a real token in this pass; no
+Firebase ID token was extracted or fabricated for that purpose, per this
+task's own instruction.
+
+**This does not close the original bug.** The complex-transcript 502 (the
+two entries below) remains open. Running this tool against real prod
+traffic, with the user's own token from their own signed-in session, is the
+pending next action, and belongs to whoever holds that standing credential,
+not this pass.
+
+### Decisions not to relitigate
+
+- Extracting a live session's Firebase ID token from browser storage is not
+  something to attempt in any pass, even to unblock a legitimate,
+  well-scoped diagnostic. The tool exists now so a human with standing
+  authorization (their own signed-in session, DevTools Network tab) can
+  supply the token themselves; that boundary does not get worked around by
+  building better tooling around it.
+- `scripts/diagnose-hosting-cutoff.mjs`'s verdict is based on whether the
+  *direct* Cloud Run call completes with a real JSON response, not on a
+  strict duration threshold: an unpinned temperature can still make output
+  length, and therefore duration, vary call to call (docs/resolution-log.md,
+  2026-07-14's temperature entries), so a single hosting-proxied call
+  finishing quickly does not by itself disprove the cutoff; the tool notes
+  this inline when a run looks inconclusive.
+
 ## 2026-07-14: Incident: temperature: 0 broke every real /structure call within a minute of deploy. Reverted; the original complex-transcript 502 is still open
 
 The entry directly below diagnosed a real 502 pattern correctly but shipped
