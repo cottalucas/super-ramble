@@ -15,6 +15,7 @@
     "eval:write": "node scripts/eval-write.mjs",
     "check:prompt-sync": "node scripts/check-prompt-sync.mjs",
     "eval:live": "node scripts/eval-live.mjs",
+    "diagnose:hosting-cutoff": "node scripts/diagnose-hosting-cutoff.mjs",
     "trace:summary": "node scripts/trace-summary.mjs",
     "traces:list": "node scripts/list-traces.mjs",
     "traces:promote": "node scripts/promote-trace.mjs",
