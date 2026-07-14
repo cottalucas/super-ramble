@@ -688,6 +688,28 @@ exports.api = onRequest(
           // malformed response. See docs/resolution-log.md, 2026-07-07.
           model: ANTHROPIC_STRUCTURE_MODEL,
           max_tokens: 8192,
+          // temperature: 0 was missing here, the real root cause behind the
+          // 91-98s live 502s investigated across several prior passes
+          // (timeoutSeconds, memory, and phase timing all ruled out as the
+          // cause; see docs/resolution-log.md, this entry's date). This is
+          // the one call docs/llm-pipeline.md documents as running at
+          // temperature 0, and src/pipeline/prompt.js's buildMessages sets
+          // it correctly, but that function is never the live call path
+          // (Firebase Functions deploys only this file, not src/pipeline),
+          // so this copy silently ran at the Anthropic API's own default
+          // (1) instead the whole time. Phase-level timing on real deployed
+          // calls showed duration scales almost exactly with output token
+          // count (~60-90 tokens/sec, consistent with Sonnet's own real
+          // generation speed): an unpinned temperature let a complex
+          // transcript occasionally sample a much longer, more exploratory
+          // completion, sometimes running the full max_tokens: 8192 budget,
+          // and generating that many tokens simply takes long enough that
+          // an upstream layer (Hosting/GFE, docs/architecture.md) cuts the
+          // connection before it returns. A short transcript rarely hits
+          // this, since there is little room for a long completion
+          // regardless of temperature, which is exactly the "small text
+          // works, long text 502s" pattern reported live.
+          temperature: 0,
           system: structureSystemPrompt,
           messages: [
             {

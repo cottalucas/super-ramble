@@ -812,6 +812,15 @@ docs/resolution-log.md's dated entry for this pass.
 
 ## Next
 
+Move Structure off a synchronous request/response wait and onto listening
+for the `structureTraces` document instead (Firestore `onSnapshot`), so a
+genuinely slow model call is never lost to an upstream proxy's own timeout:
+the trace is already written server-side (`logStructureTrace`) even on a
+run the client never gets the HTTP response for, docs/resolution-log.md's
+timeout/temperature investigation found real calls completing and writing
+a trace the browser still never saw. Not built this pass, just logged so
+it is not lost.
+
 Phase 3, part 10: a natural-language date parser, so a task's `due`
 normalizes into the store's real due shape instead of the human-readable
 fallback part 1 shipped (this also feeds a future Todoist push a real,
