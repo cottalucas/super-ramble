@@ -455,6 +455,34 @@ proxies the model and Todoist calls, and logs privacy-safe usage to
 `POST /api/todoist/disconnect`, `GET /api/todoist/projects`,
 `POST /api/todoist/write`.
 
+The whole Function (`exports.api`, one `onRequest` handling every route
+above) sets `timeoutSeconds: 120`, not the unconfigured firebase-functions
+v2 default of 60s: a rich, multi-thread `/api/structure` transcript (Sonnet,
+`max_tokens: 8192`, up to 30 reference examples formatted into the system
+prompt) can genuinely run past 60s, and a platform-level kill mid-call
+happens before `logStructureTrace` or any of the three deliberate 502
+branches (`docs/llm-pipeline.md`, Stage 2) ever run, reaching the browser as
+a bare, unexplained 502 with no `structureTraces` document to show for it.
+**This does not fully close that failure for real traffic.** Firebase
+Hosting's own `/api/**` rewrite (`firebase.json`) is the only path any real
+browser call takes, and Hosting enforces its own separate, hard,
+non-configurable 60-second request timeout ahead of this Function's own
+`timeoutSeconds`, confirmed against Firebase's own docs
+(firebase.google.com/docs/hosting/functions): past 60s, Hosting itself
+returns a `504` before this Function's longer timeout is ever consulted. A
+genuinely slow Structure call can still fail silently for a real user after
+this change, a `504` sourced from Hosting's proxy instead of a `502`
+sourced from a killed Cloud Function, same missing-trace symptom either
+way. `timeoutSeconds: 120` is still real and worth keeping: it is what
+actually governs this Function when it is not reached through the Hosting
+rewrite (a direct Cloud Run invocation, the emulator, or a future
+architecture change), and it removes an implicit, undocumented dependency
+on a platform default that could change. Closing this fully needs a
+separate, scoped decision (most likely calling this Function's own Cloud
+Run URL directly for the `/structure` route, bypassing the Hosting rewrite
+and its cap entirely, with its own CORS and client changes); see the
+resolution log entry for the date this was found and flagged, not solved.
+
 `/api/todoist/oauth` and `/api/todoist/write` are real as of phase 3, part 8
 (the "The Todoist client" section above has the full detail: OAuth exchange,
 refresh, the batched Sync API write, the priority-direction and due-string
