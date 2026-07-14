@@ -3,6 +3,131 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-14: exports.api given an explicit 120s timeoutSeconds; Firebase Hosting's own separate 60s cap found and flagged, not solved
+
+Reported directly, confirmed live: a complex, multi-thread transcript
+(three storylines, nested sub-tasks, a duplicate project name) submitted
+through the deployed app returned a bare `502` with no explanatory body
+past what the browser itself surfaces, and `npm run traces:list --uid
+<uid>` showed zero new `users/{uid}/structureTraces` documents for that
+request. That is only possible if the Function died before
+`logStructureTrace` (`functions/index.js:670` at the time) ever ran, since
+every real `/structure` call, success or failure, is supposed to write a
+trace unconditionally (`docs/architecture.md`).
+
+**Root cause.** `exports.api` (`functions/index.js`, the one `onRequest`
+behind every `/api/**` route, `firebase.json`'s rewrite) had no
+`timeoutSeconds` set, so it ran on firebase-functions v2's own unconfigured
+default: 60 seconds. `/api/structure`'s Sonnet call (`max_tokens: 8192`,
+kept exactly as-is per this task's own instruction; that value was already
+raised for the separate, already-resolved truncation problem, 2026-07-07)
+formats up to 30 `referenceExamples` into the system prompt
+(`fetchReferenceExamples`) before the model call even starts. For a
+genuinely complex transcript this whole round trip can run past 60s, and
+the platform kills the function mid-`await`, before `logStructureTrace` or
+any of the three deliberate 502 branches (refusal, `max_tokens`, invalid
+JSON, `docs/llm-pipeline.md` Stage 2) ever execute. The result is a bare,
+unexplained `502` with no trace, exactly what was reported.
+
+**What shipped.** `exports.api`'s config now sets `timeoutSeconds: 120`,
+comfortably above a typical slow Structure call and nowhere near Cloud
+Run's real ceiling for HTTPS/`onRequest` functions in firebase-functions
+v5, 3,600s (`node_modules/firebase-functions/lib/v2/options.d.ts`'s own
+doc comment, checked directly rather than assumed before picking a
+number). `docs/architecture.md`'s "/api Function contract" section
+documents the decision and the limitation below in the same pass.
+
+**This does not fully close the reported bug, and the code and docs both
+say so, not just this entry.** Checked, per this task's own explicit
+instruction, whether Firebase Hosting's `/api/**` rewrite proxy has a
+timeout of its own, shorter than Cloud Functions' own limit. It does:
+confirmed directly against Firebase's own documentation
+(firebase.google.com/docs/hosting/functions), not a summarized or
+secondhand source: "Firebase Hosting is subject to a 60-second request
+timeout. Even if you configure your HTTPS function with a longer request
+timeout, you'll still receive an HTTPS status code 504 (request timeout)
+if your function requires more than 60 seconds to run." This is not
+configurable through `firebase.json` or any other Hosting setting found;
+a public feature request asking Google to make it configurable is still
+open, unresolved, as of this pass. Every real browser call in this app
+goes through exactly that rewrite (`docs/architecture.md`: "The browser
+... calls same-origin `/api/**`"), so a Structure call that genuinely
+takes longer than 60 seconds can still fail silently for a real user after
+this change: Hosting's own proxy now returns the `504` before this
+Function's `timeoutSeconds: 120` is ever consulted, same missing-trace
+symptom as before, just sourced from a different layer.
+
+`timeoutSeconds: 120` is still the correct, necessary fix to make in this
+pass, not a wasted change: it is what actually governs this Function on
+every path that does not go through the Hosting rewrite (a direct Cloud
+Run invocation, the emulator, a future architecture change), and it
+replaces an implicit dependency on a platform default with a stated,
+intentional value. But it is not sufficient on its own for the exact bug
+reported, and this entry says so plainly rather than closing this out as
+fully resolved.
+
+**What a real fix needs, not attempted in this pass.** Most likely:
+calling this Function's own Cloud Run URL directly for the `/structure`
+route specifically, bypassing the Hosting rewrite (and its
+non-configurable cap) entirely, with its own CORS configuration (today's
+`cors: false` assumes same-origin only) and a client-side change to call
+that URL instead of `/api/structure` for this one route. That is a real,
+separate architecture decision with its own blast radius (a public,
+directly-callable Function URL, CORS opened for a known origin, a new
+client-side branch), not something to fold into a `timeoutSeconds` config
+change. Flagged here for a future, separately-scoped pass rather than
+attempted under this one's scope.
+
+**Separately flagged, not fixed, per this task's own explicit
+instruction.** Even with `timeoutSeconds: 120` (and, eventually, a real
+fix for the Hosting-layer cap above), a genuinely slow or hung Anthropic
+call still has no catchable, shorter timeout of its own ahead of either
+outer limit: `client.messages.create(...)` runs with no `timeout` option
+today. A hang or a slow response is still a silent, unexplained failure
+today (the outer `try`/`catch` at the bottom of `exports.api`'s handler
+would catch a thrown SDK timeout error and return its generic `internal
+error` `500`, but `logStructureTrace` still never runs, since it sits
+after the `await` that would have thrown). Solving this properly needs a
+real design decision, not a one-line addition: what a timed-out call's
+trace document should look like (there is no `response.usage` to record
+cost from if the request never came back), whether it should count
+against `checkAndReserveLimit`'s daily ceiling at all, and what the
+client-facing error body should say. Not trivial to add cleanly alongside
+this pass's change, so, per the task's own instruction, noted here as a
+follow-up rather than solved now.
+
+**Verified:** `npm run build` clean (asset hash `index-Yu1caoV7.js`
+unchanged from what's already live, confirming this change touches no
+client-imported file and needs no hosting redeploy, only `functions`).
+`npm run eval` 67/67 (18 fixture/contract cases, 12 date, 26 Todoist, 11
+write, plus prompt sync), unaffected by this change since it touches only
+`functions/index.js`'s Function config, nothing under `src/pipeline`.
+`node scripts/check-secrets.mjs` clean. `node --check functions/index.js`
+clean. Live verification (a real call against the deployed site, the
+Hosting-cap question this entry raises can only really be answered by
+watching a genuinely slow real call) is logged in a follow-up entry once
+merged and deployed, per this task's own instruction to verify the live
+result directly rather than trust a deploy command's exit code.
+
+### Decisions not to relitigate
+
+- `max_tokens: 8192` on the Structure call is untouched. That value was
+  already raised, for a different, already-resolved problem (model-level
+  truncation, `docs/resolution-log.md`, 2026-07-07). This pass's problem is
+  an infra-level platform timeout, a different failure mode entirely; do
+  not conflate the two or re-lower/re-raise `max_tokens` chasing this bug.
+- Firebase Hosting's `/api/**` rewrite has its own hard, non-configurable
+  60-second request timeout, confirmed against Firebase's own
+  documentation, independent of any `timeoutSeconds` set on the Cloud
+  Function it rewrites to. Do not assume a longer `timeoutSeconds` alone
+  fixes a timeout-shaped failure for real browser traffic in this app
+  without checking whether the request went through this rewrite; it
+  always does today.
+- The Anthropic call itself still has no request-level timeout shorter
+  than the Function's own outer limit. This is a known, open gap, not an
+  oversight missed by this pass; do not assume `timeoutSeconds: 120` alone
+  makes a hung model call fail cleanly with a trace and an explained error.
+
 ## 2026-07-13: Firestore-backed reference examples and automatic grading merged and deployed; the live trigger verified against a real trace and a synthetic one
 
 Follow-up to the entry directly below (the reference-examples-to-Firestore

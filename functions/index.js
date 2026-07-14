@@ -477,8 +477,39 @@ async function logStructureTrace(uid, data) {
   }
 }
 
+// timeoutSeconds was unset, so this ran on firebase-functions v2's own
+// default (60s). A rich, multi-thread transcript's /structure call (Sonnet,
+// max_tokens: 8192, up to 30 reference examples formatted into the system
+// prompt, fetchReferenceExamples above) can genuinely run past that: the
+// platform kills the function mid-await, before logStructureTrace or any of
+// the three deliberate 502 branches below ever run, so the failure reaches
+// the browser as a bare, unexplained 502 with zero users/{uid}/structureTraces
+// document to show for it. Confirmed live: docs/resolution-log.md, this
+// entry's date. 120s comfortably covers a slow Structure call; HTTPS/onRequest
+// functions in firebase-functions v5 allow up to 3,600s
+// (node_modules/firebase-functions/lib/v2/options.d.ts's own doc comment),
+// so this is nowhere close to that ceiling.
+//
+// This alone does not fully close the live bug. Firebase Hosting's own
+// /api/** rewrite (firebase.json) proxies to this function, and Hosting
+// enforces its own separate, hard, non-configurable 60-second request
+// timeout: past that, Hosting itself returns a 504 before this function's
+// own timeoutSeconds is ever consulted, confirmed directly against
+// firebase.google.com/docs/hosting/functions ("Even if you configure your
+// HTTPS function with a longer request timeout, you'll still receive an
+// HTTPS status code 504 ... if your function requires more than 60 seconds
+// to run"). Every real browser call goes through that same rewrite
+// (docs/architecture.md: "The browser ... calls same-origin /api/**"), so a
+// Structure call that genuinely takes longer than 60 seconds can still fail
+// silently for a real user after this change, just as a 504 sourced from
+// Hosting's proxy instead of a 502 sourced from a killed Cloud Function. This
+// is a real, separate, unresolved architecture problem, not solved by this
+// timeoutSeconds value; see the resolution log entry for what a real fix
+// needs (most likely calling this function's own Cloud Run URL directly for
+// the /structure route, bypassing the Hosting rewrite's cap entirely, with
+// its own CORS and client changes) and why it is out of scope here.
 exports.api = onRequest(
-  { secrets: [ANTHROPIC_API_KEY, TODOIST_CLIENT_SECRET, GROQ_API_KEY], cors: false },
+  { secrets: [ANTHROPIC_API_KEY, TODOIST_CLIENT_SECRET, GROQ_API_KEY], cors: false, timeoutSeconds: 120 },
   async (req, res) => {
     const user = await verifyAuth(req);
     if (!user) {
