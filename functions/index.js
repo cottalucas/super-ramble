@@ -28,9 +28,10 @@
 // still runs exactly once, client-side, in src/pipeline/structure.js.
 
 const { onRequest } = require('firebase-functions/v2/https');
-const { onDocumentWritten } = require('firebase-functions/v2/firestore');
+const { onDocumentWritten, onDocumentCreated } = require('firebase-functions/v2/firestore');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
+const { FieldValue } = require('firebase-admin/firestore');
 const Anthropic = require('@anthropic-ai/sdk');
 const { buildSyncCommands, isTokenExpired } = require('./todoist.js');
 const { validateStructure, ungroundedContents } = require('./contracts.js');
@@ -321,8 +322,8 @@ function buildStructureUserPrompt({ transcript, existingProjects, priorErrors })
 // first. For the ordinary single-text-block case this returns exactly what
 // response.content[0]?.text did before. Not a fix for a confirmed root
 // cause, a defensive broadening plus (via contentBlocks in
-// logStructureTrace below) the visibility needed to find the real one if it
-// recurs.
+// processStructureTrace below) the visibility needed to find the real one if
+// it recurs.
 function extractStructuredText(contentBlocks) {
   return (contentBlocks || [])
     .filter((b) => b && b.type === 'text')
@@ -403,16 +404,30 @@ async function checkAndReserveLimit(uid) {
 // forcing token fields to carry duration data. Shared by both /structure and
 // /transcribe: one daily ceiling (checkAndReserveLimit) across both, not a
 // second parallel limit system.
+//
+// Uses the modular FieldValue import (top of file), not the
+// admin.firestore.FieldValue namespace property every other call site in
+// this file still uses: the async-Structure pass (docs/resolution-log.md)
+// is what first calls this function from inside a background-triggered
+// function's own cold start (processStructureTrace), not only from an
+// HTTP handler the way every prior caller did, and real emulator testing
+// against that new invocation path found admin.firestore.FieldValue
+// intermittently undefined there specifically (a real, reproduced failure,
+// not a guess), while the modular import did not reproduce it. Scoped to
+// just this one function, not a repo-wide swap of every other
+// admin.firestore.FieldValue call site: those still only ever run from
+// contexts with an established, working production track record (the HTTP
+// handler, or gradeStructureTrace's own long-existing onDocumentWritten
+// trigger), unlike this one.
 async function logUsage(ref, { costUsd = 0, inputTokens = 0, outputTokens = 0, audioSeconds = 0 }) {
-  const inc = admin.firestore.FieldValue.increment;
   await ref.set(
     {
-      requests: inc(1),
-      costUsd: inc(costUsd),
-      inputTokens: inc(inputTokens),
-      outputTokens: inc(outputTokens),
-      audioSeconds: inc(audioSeconds),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      requests: FieldValue.increment(1),
+      costUsd: FieldValue.increment(costUsd),
+      inputTokens: FieldValue.increment(inputTokens),
+      outputTokens: FieldValue.increment(outputTokens),
+      audioSeconds: FieldValue.increment(audioSeconds),
+      updatedAt: FieldValue.serverTimestamp()
     },
     { merge: true }
   );
@@ -422,58 +437,40 @@ function endsWithPath(req, suffix) {
   return req.path === suffix || req.path.endsWith(suffix);
 }
 
-// Persists every real Structure call to users/{uid}/structureTraces, success
-// or failure, in production too. Separate from LLM_STORE_RAW_TRACES (a
-// transient debug console.log, still off in production); this is permanent,
-// per-user persistence, on by default everywhere. Reopens what
-// docs/architecture.md used to say about raw traces; see the resolution log
-// entry dated 2026-07-07 for why: there is no other way to build a real
-// golden dataset or know whether a proposal was actually good. A Firestore
-// hiccup here must never turn a working structuring response into a 500 for
-// the caller, so this is its own try/catch, called once per call.
+// Split from what used to be one logStructureTrace call made after the model
+// call already finished (docs/resolution-log.md's async-Structure pass):
+// POST /api/structure now only ever does this fast half, writing just enough
+// to unblock an immediate { traceId } response, well under any timeout. The
+// real work (fetchReferenceExamples, the model call, the rest of this
+// document) is finished asynchronously by processStructureTrace below, an
+// onDocumentCreated trigger on this same collection, so a genuinely slow
+// Structure call is no longer a long-lived HTTP request for Firebase
+// Hosting's rewrite proxy to cut off around 90-100s (docs/resolution-log.md,
+// 2026-07-14). existingProjectIds carries only ids, no names, the same
+// privacy stance this field has always had (docs/architecture.md); the
+// trigger reconstructs real names straight from Firestore when it needs them
+// for the prompt, not from anything persisted here.
 //
-// The primary write can still fail (a 2026-07-08 review found real,
-// unexplained cases: users/{uid}/llmUsage counted more requests than
-// users/{uid}/structureTraces had documents, meaning some real, paid calls
-// left zero trace record). The catch below used to just console.error and
-// return null, total silence beyond a log line nobody was watching. It now
-// attempts one minimal fallback write instead: whatever caused the first
-// write to fail might recur on a second, larger one, so the fallback carries
-// no transcript or response, just enough to know a call happened and why its
-// real trace is missing. If even that fails, there is genuinely nothing left
-// to persist; that one case logs everything needed to diagnose it directly
-// from Cloud Logging (error code, message, uid), since nothing else will
-// ever record that this call happened.
-async function logStructureTrace(uid, data) {
+// No fallback-marker write on failure, unlike the old logStructureTrace:
+// this write happens before any model call, so nothing has been billed yet
+// if it fails. The caller responds with a plain error and nothing is lost,
+// unlike the synchronous call's old failure mode (2026-07-08: a paid call
+// with zero trace record), which does not apply at this point in the flow.
+async function createProcessingTrace(uid, { transcript, existingProjectIds, priorErrors }) {
   try {
     const ref = await db.collection(`users/${uid}/structureTraces`).add({
-      ...data,
+      transcript,
+      existingProjectIds,
+      priorErrors: priorErrors || null,
+      status: 'processing',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       outcome: 'pending',
       outcomeAt: null
     });
     return ref.id;
   } catch (err) {
-    console.error('logStructureTrace failed', { uid, errorCode: err?.code ?? null, errorMessage: String(err?.message ?? err) });
-    try {
-      const fallbackRef = await db.collection(`users/${uid}/structureTraces`).add({
-        ok: false,
-        traceWriteFailed: true,
-        errorCode: err?.code ?? null,
-        errorMessage: String(err?.message ?? err),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        outcome: 'pending',
-        outcomeAt: null
-      });
-      return fallbackRef.id;
-    } catch (fallbackErr) {
-      console.error('logStructureTrace fallback also failed', {
-        uid,
-        errorCode: fallbackErr?.code ?? null,
-        errorMessage: String(fallbackErr?.message ?? fallbackErr)
-      });
-      return null;
-    }
+    console.error('createProcessingTrace failed', { uid, errorCode: err?.code ?? null, errorMessage: String(err?.message ?? err) });
+    return null;
   }
 }
 
@@ -520,6 +517,18 @@ async function logStructureTrace(uid, data) {
 // test of that theory, not a final number: the phase-level timing logged
 // below (`structure phase timings`) is what actually confirms or rules it
 // out, not a guess.
+//
+// The above is kept as the historical record of why this Function got these
+// values; it is no longer the whole story. As of the async-Structure pass
+// (docs/resolution-log.md), the actual model call this reasoning was about
+// moved out of this handler entirely, into processStructureTrace below (an
+// onDocumentCreated trigger with its own independently-reasoned
+// timeoutSeconds/memory). exports.api itself still keeps 120s/512MiB, now
+// for its remaining endpoints (Transcribe's Groq call, the Todoist OAuth and
+// sync calls), where nothing found so far suggests a smaller value is safe
+// either. The /structure route this handler now serves is just the fast
+// enqueue write, not the long-running call the numbers above were measured
+// against.
 exports.api = onRequest(
   { secrets: [ANTHROPIC_API_KEY, TODOIST_CLIENT_SECRET, GROQ_API_KEY], cors: false, timeoutSeconds: 120, memory: '512MiB' },
   async (req, res) => {
@@ -538,7 +547,20 @@ exports.api = onRequest(
       // so there is nothing for a trace-and-eval flywheel to feed; llmUsage
       // already gives cost visibility. See docs/llm-pipeline.md, Stage 1.
       if (endsWithPath(req, '/transcribe') && req.method === 'POST') {
+        // Phase-level timing, mirroring the Structure handler's "structure
+        // phase timings" line below (docs/resolution-log.md, 2026-07-14):
+        // added so real transcribe-duration data starts accumulating from
+        // this deploy forward. There is no historical data for this call
+        // yet, unlike Structure's; scripts/structure-timing-stats.mjs has
+        // nothing to read here until real calls log it. Logged
+        // unconditionally, not gated behind STORE_RAW_TRACES, same reason as
+        // Structure's: visible on every real call, not just a local debug run.
+        const phaseStart = Date.now();
+        const phaseTimingsMs = {};
+
+        const limitStart = Date.now();
         const limit = await checkAndReserveLimit(user.uid);
+        phaseTimingsMs.checkAndReserveLimit = Date.now() - limitStart;
         if (!limit.allowed) {
           res.status(429).json({ error: limit.reason });
           return;
@@ -584,6 +606,7 @@ exports.api = onRequest(
         form.append('model', GROQ_TRANSCRIBE_MODEL);
         form.append('response_format', 'json');
 
+        const groqCallStart = Date.now();
         let groqRes;
         try {
           groqRes = await fetch(GROQ_TRANSCRIBE_URL, {
@@ -611,40 +634,48 @@ exports.api = onRequest(
           res.status(502).json({ error: 'the transcription service returned an unreadable response' });
           return;
         }
+        phaseTimingsMs.groqCall = Date.now() - groqCallStart;
 
         const transcript = typeof groqBody.text === 'string' ? groqBody.text : '';
         const billableSeconds = Math.max(durationSeconds, GROQ_MIN_BILLABLE_SECONDS);
         const costUsd = (billableSeconds / 3600) * GROQ_TRANSCRIBE_USD_PER_HOUR;
+        const logUsageStart = Date.now();
         await logUsage(limit.ref, { costUsd, audioSeconds: durationSeconds });
+        phaseTimingsMs.logUsage = Date.now() - logUsageStart;
+
+        console.log('transcribe phase timings', {
+          uid: user.uid,
+          totalMs: Date.now() - phaseStart,
+          durationSeconds,
+          ...phaseTimingsMs
+        });
 
         res.json({ transcript });
         return;
       }
 
-      // (a) Structuring call. One combined decision-and-tree call on Sonnet
-      // (the named exception above), constrained by STRUCTURE_JSON_SCHEMA via
-      // output_config.format so the API guarantees the response shape. The
-      // browser (src/pipeline/structure.js) still validates what a schema
-      // cannot and drives the one corrective retry, resubmitting here with
-      // priorErrors when it does.
+      // (a) Structuring call. Enqueues only: writes a fast, minimal
+      // users/{uid}/structureTraces document (status: 'processing') and
+      // responds immediately with { traceId }. The real work (fetching
+      // reference examples, the actual Sonnet call, contract-relevant
+      // fields, phase timings) runs asynchronously in processStructureTrace
+      // below, an onDocumentCreated trigger on this same collection.
+      //
+      // This split exists because the inline version of this call could not
+      // survive a genuinely slow Structure response: docs/resolution-log.md's
+      // 2026-07-14 entries found real calls taking 91-98s, well inside this
+      // Function's own 120s timeoutSeconds, still failing with a bare 502
+      // because Firebase Hosting's /api/** rewrite proxy (or a layer in
+      // front of it) gives up on the client's connection around 90-100s
+      // regardless of what this Function itself is configured to allow.
+      // This enqueue write is fast (Phase 1 timing data: checkAndReserveLimit
+      // plus the trace write are each well under a second), so there is no
+      // long HTTP request left for that upstream layer to cut off; the
+      // client instead watches the trace document resolve via Firestore
+      // onSnapshot (src/components/SuperRambleModal.jsx), exactly the
+      // approach docs/roadmap.md's "Next" section had already named.
       if (endsWithPath(req, '/structure') && req.method === 'POST') {
-        // Phase-level timing, added to find out where a slow /structure call
-        // actually spends its time: a Workbench call with the exact same
-        // system prompt, schema, and transcript finished in ~10s, but the
-        // same request through this deployed Function took 91-98s across
-        // three real live attempts before an upstream layer 502'd it
-        // (docs/resolution-log.md, this entry's date). That ~10x gap can
-        // only be inside this handler's own execution (cold start, a
-        // Firestore round trip, memory-driven CPU throttling), not the model
-        // call itself. Logged unconditionally (not gated behind
-        // STORE_RAW_TRACES) so this is visible on every real call going
-        // forward, not just a local debug run.
-        const phaseStart = Date.now();
-        const phaseTimingsMs = {};
-
-        const limitStart = Date.now();
         const limit = await checkAndReserveLimit(user.uid);
-        phaseTimingsMs.checkAndReserveLimit = Date.now() - limitStart;
         if (!limit.allowed) {
           res.status(429).json({ error: limit.reason });
           return;
@@ -656,150 +687,19 @@ exports.api = onRequest(
           return;
         }
 
-        // Fetched fresh on every call, not cached in memory across
-        // invocations: the whole point of moving this pool to Firestore is
-        // that an auto-promotion (or a manual seed edit) is felt by the very
-        // next real call, not only after a redeploy. A Firestore hiccup here
-        // must not turn a working structuring call into a 500; an empty
-        // examples array degrades gracefully to "written rules only", the
-        // exact prompt shape this app ran before reference examples existed
-        // at all, not a failure.
-        let referenceExamples = [];
-        const fetchExamplesStart = Date.now();
-        try {
-          referenceExamples = await fetchReferenceExamples();
-        } catch (err) {
-          console.error('fetchReferenceExamples failed, continuing with written rules only', {
-            errorMessage: String(err?.message ?? err)
-          });
-        }
-        phaseTimingsMs.fetchReferenceExamples = Date.now() - fetchExamplesStart;
-        const structureSystemPrompt = referenceExamples.length
-          ? [STRUCTURE_SYSTEM_PROMPT_RULES, '', formatReferenceExamples(referenceExamples)].join('\n')
-          : STRUCTURE_SYSTEM_PROMPT_RULES;
-
-        const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });
-        const modelCallStart = Date.now();
-        const response = await client.messages.create({
-          // 8192, not 4096: a rich multi-section dump (several workstreams,
-          // nested sub-tasks, a full reasoning string) hit the old 4096 cap
-          // and got cut off mid-JSON, surfacing as "model response was not
-          // valid JSON" with no way to tell truncation apart from a genuine
-          // malformed response. See docs/resolution-log.md, 2026-07-07.
-          model: ANTHROPIC_STRUCTURE_MODEL,
-          max_tokens: 8192,
-          // NOT temperature: 0. Tried once (docs/resolution-log.md, this
-          // entry's date) as the fix for the 91-98s live 502s a prior
-          // investigation traced to an unpinned temperature letting a
-          // complex transcript occasionally sample a very long completion.
-          // That diagnosis of *why* long completions happened was correct,
-          // but the fix was wrong for this pinned model: claude-sonnet-5
-          // rejects `temperature` outright, a real live 400 confirmed
-          // seconds after deploy ("`temperature` is deprecated for this
-          // model"), turning every single /structure call, short or long,
-          // into an immediate failure, a strictly worse regression than the
-          // bug it was meant to fix. Reverted the same day. Do not re-add
-          // temperature to this call without first confirming, against
-          // Anthropic's own current API reference for claude-sonnet-5
-          // specifically, that the parameter is actually accepted; do not
-          // trust docs/llm-pipeline.md's "temperature 0" line or
-          // src/pipeline/prompt.js's buildMessages (never the live call
-          // path, so never actually exercised against the real API) as
-          // proof it is.
-          system: structureSystemPrompt,
-          messages: [
-            {
-              role: 'user',
-              content: buildStructureUserPrompt({
-                transcript,
-                existingProjects: Array.isArray(existingProjects) ? existingProjects : [],
-                priorErrors: Array.isArray(priorErrors) ? priorErrors : null
-              })
-            }
-          ],
-          output_config: { format: { type: 'json_schema', schema: STRUCTURE_JSON_SCHEMA } }
-        });
-        phaseTimingsMs.modelCall = Date.now() - modelCallStart;
-
-        const inputTokens = response.usage?.input_tokens || 0;
-        const outputTokens = response.usage?.output_tokens || 0;
-        const costUsd =
-          (inputTokens / 1_000_000) * STRUCTURE_INPUT_USD_PER_MTOK +
-          (outputTokens / 1_000_000) * STRUCTURE_OUTPUT_USD_PER_MTOK;
-        const logUsageStart = Date.now();
-        await logUsage(limit.ref, { costUsd, inputTokens, outputTokens });
-        phaseTimingsMs.logUsage = Date.now() - logUsageStart;
-
-        const stopReason = response.stop_reason || null;
-        const rawText = extractStructuredText(response.content);
-        let parsedResponse = null;
-        try {
-          parsedResponse = JSON.parse(rawText);
-        } catch {
-          parsedResponse = null;
-        }
-        const ok = parsedResponse !== null && stopReason !== 'refusal' && stopReason !== 'max_tokens';
-
-        // Logged before any failure branch below, not after, so a truncated
-        // or malformed response is still visible in Cloud Logging when
-        // LLM_STORE_RAW_TRACES=true. The prior placement (after a successful
-        // JSON.parse) meant the one case worth debugging never got logged.
-        if (STORE_RAW_TRACES) {
-          // Local debugging only. Off by default in production.
-          console.log('raw trace', JSON.stringify({ body: req.body, stopReason, rawText, usage: response.usage }));
-        }
-
         const existingProjectsArr = Array.isArray(existingProjects) ? existingProjects : [];
-        const logStructureTraceStart = Date.now();
-        const traceId = await logStructureTrace(user.uid, {
+        const traceId = await createProcessingTrace(user.uid, {
           transcript,
           existingProjectIds: existingProjectsArr.map((p) => p.id),
-          model: ANTHROPIC_STRUCTURE_MODEL,
-          priorErrors: Array.isArray(priorErrors) ? priorErrors : null,
-          stopReason,
-          response: parsedResponse,
-          rawText,
-          // Anthropic's own request id, so a genuinely unexplained case can
-          // be cross-referenced with Anthropic support if it recurs.
-          responseId: response.id || null,
-          // The piece that was missing: every content block's type and text
-          // (or, for a non-text block, a truncated JSON dump of it), so a
-          // repeat of the empty-rawText case shows exactly what came back
-          // instead of leaving an empty string with no explanation.
-          contentBlocks: (response.content || []).map((b) => ({
-            type: b.type,
-            text: b.type === 'text' ? b.text : JSON.stringify(b).slice(0, 2000)
-          })),
-          ok,
-          inputTokens,
-          outputTokens,
-          costUsd
-        });
-        phaseTimingsMs.logStructureTrace = Date.now() - logStructureTraceStart;
-
-        console.log('structure phase timings', {
-          uid: user.uid,
-          traceId,
-          totalMs: Date.now() - phaseStart,
-          ...phaseTimingsMs
+          priorErrors: Array.isArray(priorErrors) ? priorErrors : null
         });
 
-        if (stopReason === 'refusal') {
-          res.status(502).json({ error: 'the model declined to respond' });
+        if (!traceId) {
+          res.status(502).json({ error: 'could not start structuring. Try again.' });
           return;
         }
 
-        if (stopReason === 'max_tokens') {
-          res.status(502).json({ error: 'model response was truncated (max_tokens reached) before it finished' });
-          return;
-        }
-
-        if (parsedResponse === null) {
-          res.status(502).json({ error: 'model response was not valid JSON' });
-          return;
-        }
-
-        res.json({ traceId, structured: parsedResponse });
+        res.json({ traceId });
         return;
       }
 
@@ -1098,6 +998,229 @@ exports.api = onRequest(
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'internal error' });
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// processStructureTrace: does the real Structure work POST /api/structure
+// above used to do inline, asynchronously, the moment its own enqueue write
+// creates a new users/{uid}/structureTraces document with status:
+// 'processing'. onDocumentCreated, not onDocumentWritten: onCreate fires
+// exactly once for this document's whole lifetime, so this trigger's own
+// later write-back below can never retrigger itself, unlike
+// gradeStructureTrace below, which needs an explicit judgedAt guard for
+// exactly that reason.
+//
+// timeoutSeconds/memory reasoned from Phase 1's real data
+// (scripts/structure-timing-stats.mjs, docs/resolution-log.md), not copied
+// from exports.api's own 120s/512MiB: an event-triggered function's own
+// ceiling is 540s (9 minutes), not the 3,600s an onRequest function like
+// exports.api gets (node_modules/firebase-functions/lib/v2/options.d.ts),
+// and this trigger runs with no Hosting rewrite in front of it at all (it is
+// invoked directly by Eventarc, never through firebase.json's /api/**
+// route), so the ~90-100s upstream cutoff that motivated this whole
+// redesign does not apply here regardless of what timeoutSeconds is set to.
+// 180s is chosen with real headroom over the real observed max modelCall
+// duration (94.6s across the 8 real calls logged so far) specifically
+// because that sample is still small; revisit once
+// scripts/structure-timing-stats.mjs has more history. 512MiB matches
+// exports.api's own value, but for its own reason here: Phase 1's data shows
+// modelCall is ~94% of total time regardless of memory (the 512MiB bump
+// already ruled out CPU throttling as a factor for this exact call shape,
+// docs/resolution-log.md, 2026-07-14), so there is no evidence this trigger
+// needs more.
+exports.processStructureTrace = onDocumentCreated(
+  { document: 'users/{uid}/structureTraces/{traceId}', secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 180, memory: '512MiB' },
+  async (event) => {
+    const snap = event.data;
+    if (!snap || !snap.exists) return;
+    const data = snap.data();
+    const { uid, traceId } = event.params;
+
+    // Only ever acts on a document its own enqueue write created. Every
+    // other real shape this collection can hold (a traceWriteFailed marker
+    // from createProcessingTrace's own failure path, which never sets
+    // status at all) is not this trigger's concern.
+    if (data.status !== 'processing') return;
+
+    const phaseStart = Date.now();
+    const phaseTimingsMs = {};
+
+    const { transcript, existingProjectIds, priorErrors } = data;
+
+    // The trace document only ever persists existingProjectIds (ids only,
+    // no names: docs/architecture.md's privacy stance for this field,
+    // unchanged by this pass), but buildStructureUserPrompt needs real
+    // names for the "EXISTING PROJECTS" block, the same one the old
+    // synchronous call always built from the client's live existingProjects
+    // payload. Reconstructed here straight from Firestore (Admin SDK,
+    // bypasses rules) rather than widening what the trace document stores:
+    // this is Admin-only data the model needs to route correctly, not
+    // something that needs to leave this Function or get persisted a second
+    // time. A project deleted between submit and this trigger running is
+    // simply dropped, not treated as an error: routing to a project that no
+    // longer exists doesn't make sense either way.
+    const ids = Array.isArray(existingProjectIds) ? existingProjectIds : [];
+    const projectDocs = await Promise.all(ids.map((id) => db.doc(`users/${uid}/projects/${id}`).get()));
+    const existingProjects = projectDocs.filter((d) => d.exists).map((d) => ({ id: d.id, name: d.data().name }));
+
+    let referenceExamples = [];
+    const fetchExamplesStart = Date.now();
+    try {
+      referenceExamples = await fetchReferenceExamples();
+    } catch (err) {
+      console.error('fetchReferenceExamples failed, continuing with written rules only', {
+        errorMessage: String(err?.message ?? err)
+      });
+    }
+    phaseTimingsMs.fetchReferenceExamples = Date.now() - fetchExamplesStart;
+    const structureSystemPrompt = referenceExamples.length
+      ? [STRUCTURE_SYSTEM_PROMPT_RULES, '', formatReferenceExamples(referenceExamples)].join('\n')
+      : STRUCTURE_SYSTEM_PROMPT_RULES;
+
+    let response = null;
+    let stopReason = null;
+    let parsedResponse = null;
+    let rawText = '';
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let costUsd = 0;
+    let errorMessage = null;
+
+    try {
+      const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });
+      const modelCallStart = Date.now();
+      response = await client.messages.create({
+        // 8192, not 4096, and NOT temperature: 0: both unchanged from the
+        // synchronous call this replaces. See docs/resolution-log.md,
+        // 2026-07-07 (max_tokens) and 2026-07-14 (the temperature incident:
+        // claude-sonnet-5 rejects the parameter outright, a real live 400).
+        // Do not re-add temperature here without first confirming, against
+        // Anthropic's own current API reference for claude-sonnet-5
+        // specifically, that it is accepted.
+        model: ANTHROPIC_STRUCTURE_MODEL,
+        max_tokens: 8192,
+        system: structureSystemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content: buildStructureUserPrompt({
+              transcript,
+              existingProjects,
+              priorErrors: Array.isArray(priorErrors) ? priorErrors : null
+            })
+          }
+        ],
+        output_config: { format: { type: 'json_schema', schema: STRUCTURE_JSON_SCHEMA } }
+      });
+      phaseTimingsMs.modelCall = Date.now() - modelCallStart;
+
+      inputTokens = response.usage?.input_tokens || 0;
+      outputTokens = response.usage?.output_tokens || 0;
+      costUsd =
+        (inputTokens / 1_000_000) * STRUCTURE_INPUT_USD_PER_MTOK + (outputTokens / 1_000_000) * STRUCTURE_OUTPUT_USD_PER_MTOK;
+
+      const logUsageStart = Date.now();
+      await logUsage(db.doc(`users/${uid}/llmUsage/${today()}`), { costUsd, inputTokens, outputTokens });
+      phaseTimingsMs.logUsage = Date.now() - logUsageStart;
+
+      stopReason = response.stop_reason || null;
+      rawText = extractStructuredText(response.content);
+      try {
+        parsedResponse = JSON.parse(rawText);
+      } catch {
+        parsedResponse = null;
+      }
+
+      if (STORE_RAW_TRACES) {
+        // Local debugging only. Off by default in production.
+        console.log('raw trace', JSON.stringify({ transcript, existingProjects, stopReason, rawText, usage: response.usage }));
+      }
+
+      if (stopReason === 'refusal') errorMessage = 'the model declined to respond';
+      else if (stopReason === 'max_tokens') errorMessage = 'model response was truncated (max_tokens reached) before it finished';
+      else if (parsedResponse === null) errorMessage = 'model response was not valid JSON';
+    } catch (err) {
+      console.error('processStructureTrace: model call failed', { uid, traceId, errorMessage: String(err?.message ?? err) });
+      errorMessage = 'structuring failed. Try again.';
+    }
+
+    const ok = parsedResponse !== null && stopReason !== 'refusal' && stopReason !== 'max_tokens';
+
+    console.log('structure phase timings', {
+      uid,
+      traceId,
+      totalMs: Date.now() - phaseStart,
+      ...phaseTimingsMs
+    });
+
+    // Real correctness risk: outcome already means "the user's own
+    // confirm/cancel decision" (docs/architecture.md), set to 'pending' at
+    // enqueue time and never meant to move except through POST
+    // /structure/outcome. That endpoint can race this trigger: a user can
+    // Discard (cancel) while this is still mid-flight, since the new
+    // waiting UI (src/components/SuperRambleModal.jsx) allows closing
+    // before the result arrives. A blind merge that wrote outcome: 'pending'
+    // here unconditionally, mirroring the old synchronous logStructureTrace
+    // write's shape too literally, would stomp a real 'cancelled' back to
+    // 'pending' if that POST lands first. Re-read the document immediately
+    // before this final write and only include outcome/outcomeAt if nothing
+    // real has been decided yet; a real outcome already present is left
+    // completely untouched.
+    const latestSnap = await snap.ref.get();
+    const latestOutcome = latestSnap.exists ? latestSnap.data().outcome : undefined;
+    const outcomeFields = !latestOutcome || latestOutcome === 'pending' ? { outcome: 'pending', outcomeAt: null } : {};
+
+    // This write can still fail (a Firestore hiccup, same class of case
+    // logStructureTrace's own fallback used to guard against) after the
+    // model call already succeeded and was billed via logUsage above: a
+    // real cost with no visible result, the exact 2026-07-08 failure mode
+    // this pass must not silently reintroduce in a new spot. There is no
+    // separate fallback document to write here the way the old synchronous
+    // path had one: this update targets a document that already exists
+    // (created at enqueue time), so a second write attempt against the same
+    // document, for the same underlying cause, is unlikely to succeed any
+    // better. The honest mitigation is a loud, detailed log instead: uid,
+    // traceId, and the error, so this is diagnosable from Cloud Logging
+    // directly if it ever happens, the same "nothing else will ever record
+    // that this call happened" reasoning the original fallback used. The
+    // client's own onSnapshot listener still has its watchdog timeout
+    // (SuperRambleModal.jsx) for this exact case: a trace stuck at
+    // status: 'processing' forever times out client-side instead of
+    // hanging.
+    try {
+      await snap.ref.set(
+        {
+          model: ANTHROPIC_STRUCTURE_MODEL,
+          stopReason,
+          response: parsedResponse,
+          rawText,
+          responseId: response?.id || null,
+          contentBlocks: (response?.content || []).map((b) => ({
+            type: b.type,
+            text: b.type === 'text' ? b.text : JSON.stringify(b).slice(0, 2000)
+          })),
+          ok,
+          inputTokens,
+          outputTokens,
+          costUsd,
+          status: ok ? 'done' : 'failed',
+          ...(errorMessage ? { errorMessage } : {}),
+          ...outcomeFields
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.error('processStructureTrace: final write failed after a billed model call', {
+        uid,
+        traceId,
+        inputTokens,
+        outputTokens,
+        costUsd,
+        errorCode: err?.code ?? null,
+        errorMessage: String(err?.message ?? err)
+      });
     }
   }
 );

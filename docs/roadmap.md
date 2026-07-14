@@ -810,16 +810,39 @@ docs/resolution-log.md's dated entry for this pass.
   intact, verified directly (`functions/node_modules` removed, full
   `npm run eval` rerun clean) rather than assumed.
 
+Async Structure: the item the "Next" section below used to name is now
+built. `POST /api/structure` enqueues only (a fast trace write, `status:
+"processing"`, responds `{ traceId }` immediately); `processStructureTrace`
+(new, `functions/index.js`, an `onDocumentCreated` trigger on
+`users/{uid}/structureTraces/{traceId}`) does the real model call
+asynchronously and merge-writes the result. The client
+(`SuperRambleModal.jsx`) subscribes to its own trace document via Firestore
+`onSnapshot` instead of awaiting one long HTTP response, exactly the
+approach this section named. This closes the user-facing complex-transcript
+`502` docs/resolution-log.md's 2026-07-14 entries root-caused (Firebase
+Hosting's rewrite proxy cutting the connection around 90-100s): there is no
+long-lived request left for that layer to cut off. See
+`docs/architecture.md`'s "Background triggers" section for the full
+contract, including the real outcome-race guard (a user can Discard while
+still waiting) and `scripts/structure-timing-stats.mjs` for the real timing
+data this pass's UI copy and trigger `timeoutSeconds` are both based on. See
+the resolution log entry for this pass for live verification against the
+deployed site.
+
 ## Next
 
-Move Structure off a synchronous request/response wait and onto listening
-for the `structureTraces` document instead (Firestore `onSnapshot`), so a
-genuinely slow model call is never lost to an upstream proxy's own timeout:
-the trace is already written server-side (`logStructureTrace`) even on a
-run the client never gets the HTTP response for, docs/resolution-log.md's
-timeout/temperature investigation found real calls completing and writing
-a trace the browser still never saw. Not built this pass, just logged so
-it is not lost.
+Phase 1's real timing data (`scripts/structure-timing-stats.mjs`) is still a
+small sample (8 real calls as of this pass). Re-run it periodically as more
+real Structure calls accumulate, and revisit the waiting-state UI copy in
+`SuperRambleModal.jsx` and `processStructureTrace`'s own `timeoutSeconds`
+once a larger sample exists; both are explicitly reasoned from this small
+sample today, not a final number.
+
+`scripts/diagnose-hosting-cutoff.mjs` (the direct-Cloud-Run-URL test) is
+still real, standalone follow-up work if it is ever still worth confirming
+exactly which upstream layer enforced the ~90-100s cutoff; it is no longer
+a blocker for the user-facing bug, now closed by the async-Structure work
+above.
 
 Phase 3, part 10: a natural-language date parser, so a task's `due`
 normalizes into the store's real due shape instead of the human-readable

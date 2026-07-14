@@ -37,13 +37,20 @@ service cloud.firestore {
         allow read: if isOwner(uid);
         allow write: if false;
       }
-      // Structuring traces (transcript, response, confirm/cancel outcome) are
-      // never read or written by the client SDK, not even the owner. Only the
-      // Function (Admin SDK) and the local review/promote scripts (also
-      // Admin SDK) touch this collection; Admin SDK bypasses rules regardless
-      // of what they say, so this line states intent, it is not their gate.
+      // Structuring traces (transcript, response, confirm/cancel outcome).
+      // The owner can now read their own trace document: the async-Structure
+      // pass (docs/resolution-log.md) has the client subscribe to its own
+      // trace via onSnapshot (SuperRambleModal.jsx) to learn when
+      // processStructureTrace (functions/index.js) finishes the real work, so
+      // this can no longer stay fully denied the way it did while every real
+      // call was synchronous end to end. Write stays denied to every client,
+      // owner included: only the Function (Admin SDK, both the enqueue write
+      // and the processing trigger) and the local review/promote scripts
+      // (also Admin SDK, which bypasses rules regardless of what they say)
+      // ever write here.
       match /structureTraces/{traceId} {
-        allow read, write: if false;
+        allow read: if isOwner(uid);
+        allow write: if false;
       }
       // The Todoist OAuth token (access + refresh), never readable by the
       // client, not even the owner: unlike encrypted personal task text,

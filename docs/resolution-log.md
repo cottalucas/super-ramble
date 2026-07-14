@@ -3,6 +3,208 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-14: Async Structure, real timing data, and an emulator integration test. The complex-transcript 502 is architecturally closed; live verification is a follow-up entry
+
+Four things, in order: real timing data from production, the async
+redesign itself, the client/UI changes it requires, and a new emulator
+integration test that in turn found and fixed a real bug in the new code.
+
+**Phase 1: real timing data, not estimates.** Added
+`scripts/structure-timing-stats.mjs` (`npm run structure:timing-stats`):
+reads every real `"structure phase timings"` Cloud Logging entry
+(`functions/index.js`, unconditional since the 2026-07-14 phase-timing
+pass), cross-references each `traceId` against its real
+`structureTraces` document (a `collectionGroup` query, not a per-uid loop)
+for `outputTokens`, and reports percentiles bucketed by output-token range.
+Verified the real log entry shape directly before writing the parser
+(`textPayload`, Node's `util.inspect` format, not `jsonPayload`) rather than
+assuming one. Real output against this project's actual history, 8 calls
+total:
+
+| bucket | n | p50 | p90 | max |
+|---|---|---|---|---|
+| all calls | 8 | 81.4s | 96.2s | 96.2s |
+| <1000 output tokens | 2 | 9.4s | 10.2s | 10.2s |
+| 4000-7000 output tokens | 2 | 73.2s | 81.4s | 81.4s |
+| 7000-8192 output tokens (near/at cap) | 4 | 91.7s | 96.2s | 96.2s |
+
+`modelCall` is ~94% of `totalMs` on average: duration tracks output length,
+not where the call originates, confirming the existing diagnosis. Only 8
+data points exist; `docs/roadmap.md`'s "Next" section flags this sample size
+explicitly and asks for a re-run as real usage accumulates. Also added the
+same phase-timing instrumentation (unconditional `console.log('transcribe
+phase timings', ...)`) around `/api/transcribe`'s Groq call, so equivalent
+data starts accumulating for Transcribe from this deploy forward; there was,
+and is, no historical data for that call, stated plainly rather than
+guessed at in the UI copy below.
+
+**Phase 2: Structure is asynchronous now, not a long-lived HTTP request.**
+`POST /api/structure` (`functions/index.js`) now only enqueues: it runs
+`checkAndReserveLimit` and input validation exactly as before, writes a
+fast, minimal `users/{uid}/structureTraces` document (`status:
+"processing"`, via the new `createProcessingTrace`, a split of what used to
+be `logStructureTrace`), and responds immediately with `{ traceId }`. The
+real work — `fetchReferenceExamples`, the actual `client.messages.create`
+call (unchanged shape: `max_tokens: 8192`, no `temperature`, the same JSON
+schema), phase timings, `logUsage` — now runs in `processStructureTrace`, a
+new `onDocumentCreated` trigger on the same collection (not
+`onDocumentWritten`: `onCreate` fires exactly once, so its own later
+write-back can never retrigger itself, unlike `gradeStructureTrace`, which
+needs an explicit `judgedAt` guard for exactly that reason).
+`existingProjectIds` on the trace document stays ids-only (the existing
+privacy stance); the trigger reconstructs real `{id, name}` pairs straight
+from `users/{uid}/projects` via Admin SDK when it builds the prompt, since
+the trace document itself was never meant to carry project names.
+
+This closes the actual bug: there is no longer a long-lived HTTP request for
+Firebase Hosting's `/api/**` rewrite (or whatever sits in front of it) to
+cut off around 90-100s, because `processStructureTrace` is invoked directly
+by Eventarc, never through that rewrite. `timeoutSeconds: 180` /
+`memory: '512MiB'` on the new trigger are reasoned from the real data above
+(comfortable headroom over the observed 94.6s max modelCall, at a small
+sample size), not copied from `exports.api`'s own 120s/512MiB; an
+event-triggered function's own ceiling is 540s, confirmed against
+`firebase-functions`'s own `options.d.ts`, not assumed.
+
+**The real correctness risk, handled and tested.** `outcome` means the
+user's own confirm/cancel decision, set to `"pending"` at enqueue time.
+`POST /api/structure/outcome` can race `processStructureTrace`: the new
+waiting UI (below) allows Discard while still waiting, so a `"cancelled"`
+outcome can land while the trigger is still mid-flight. The trigger's final
+write re-reads the document immediately beforehand and only ever includes
+`outcome: "pending"` if nothing real has been decided yet, never stomping a
+real `"cancelled"` back to `"pending"`. Also hardened the final write itself
+against its own failure: if that merge-write throws after the model call
+has already been billed (`logUsage` already ran), there is no separate
+fallback document the way the old `logStructureTrace` had one (this write
+targets a document that already exists), so it logs every diagnostic detail
+directly to Cloud Logging instead; the client's own watchdog timeout still
+bounds the wait either way.
+
+**A real bug found by testing, not assumed working.** Building
+`scripts/structure-emulator-test.mjs` (below) surfaced a genuine failure:
+`processStructureTrace`'s call to `logUsage` threw `"Cannot read properties
+of undefined (reading 'increment')"` against the real local Firebase
+emulator — `admin.firestore.FieldValue` (the legacy namespace-property
+form every call site in this file uses) was undefined specifically when
+accessed from inside a Firestore-triggered function's own invocation in
+this emulator setup, reproduced twice, not a fluke. `logUsage` is switched
+to the modular import instead (`const { FieldValue } = require(
+'firebase-admin/firestore')`, added at the top of `functions/index.js`),
+scoped to just this one function: every other `admin.firestore.FieldValue`
+call site in this file is left untouched, since those only ever run from
+contexts with an established, real production track record (the HTTP
+handler, or `gradeStructureTrace`'s own long-existing trigger), unlike this
+one, which this pass is the first to call from a background trigger's cold
+start at all. Re-ran the same emulator test after the fix: both checks
+passed, `status="done"` on a real successful model call, not the failure
+path. A background task was flagged (not fixed here, out of scope) for a
+same-class error this same test run incidentally found in
+`gradeStructureTrace`'s own `serverTimestamp()` write, local-emulator-only,
+same underlying mechanism, unrelated pre-existing code.
+
+**Firestore rules.** `structureTraces/{traceId}` changes from `allow read,
+write: if false` to `allow read: if isOwner(uid); allow write: if false`:
+the client now needs to read its own trace document to `onSnapshot` it.
+Write stays denied to every client, owner included; only the Function and
+the local Admin-SDK scripts write here, unchanged.
+
+**Client: `SuperRambleModal.jsx`'s `callModel`** now POSTs, reads
+`traceId` from the immediate response, and subscribes via Firestore
+`onSnapshot` to `users/{uid}/structureTraces/{traceId}`, resolving on
+`status: "done"` (with `data.response`) or rejecting on `status: "failed"`
+(with `data.errorMessage`). A 240s client-side watchdog (comfortably above
+the trigger's own 180s ceiling, so the server gets a real chance to write
+its own explained failure first) rejects with a clear message if nothing
+ever arrives. The listener unsubscribes on every resolution path, on the
+watchdog firing, and on component unmount (a new `unsubscribeTraceRef`
+cleanup effect), since closing the modal mid-wait is now possible: a new
+`waitingTraceId`-gated Cancel affordance (footer button, Escape, and
+backdrop click) lets the user Discard while still waiting, sending
+`outcome: "cancelled"` on the trace the trigger above is guarded against
+stomping.
+
+**Phase 3: UI.** The `'loading'` state now shows, once a `traceId` exists,
+real-percentile copy ("Usually under 82s, can take up to 96s for a complex
+dump", `STRUCTURE_P50_SECONDS`/`STRUCTURE_P90_SECONDS` in
+`SuperRambleModal.jsx`, straight from the table above, not invented) and a
+live elapsed-seconds counter, ticking client-side, independent of the
+`onSnapshot` resolution itself. `VoiceRecorder.jsx`'s `"Transcribing what
+you said."` state gets a live elapsed-time counter too, but deliberately no
+percentile estimate: there is no historical Transcribe timing data yet
+(this same pass is what started logging it), stated in a code comment so a
+future reader doesn't mistake the omission for an oversight.
+
+**Phase 4: tests.** `npm run eval` (67/67) confirmed unaffected:
+`src/pipeline/structure.js` never imports `functions/` or touches
+Firestore, offline evals still mock `callModel` directly and never
+construct a real HTTP or Firestore call, so the async redesign changes
+nothing about that zero-credit, zero-network guarantee. New:
+`scripts/structure-emulator-test.mjs` (`EMULATOR_ALLOW_LIVE=true npm run
+test:structure-emulator`), gated the same way `scripts/eval-live.mjs` is
+since `processStructureTrace` spends real Anthropic credits even against
+the emulator. Runs the real Firebase emulator suite (Firestore, Functions,
+Auth) via `firebase emulators:exec`, creates a trace document the same
+shape the real enqueue write produces, and asserts, through a real
+Firestore client-SDK `onSnapshot` listener (not just an Admin-SDK poll):
+the trigger resolves a normal trace to `status: "done"`, and the
+outcome-race case above survives with `outcome` still `"cancelled"` after
+the trigger's own final write. Documented in the script's own header,
+including the local Java-runtime prerequisite for the Firestore emulator
+(not previously needed by this repo's tooling) and the real-secret
+prerequisite (`functions/.secret.local` or existing `gcloud auth
+application-default login` credentials, the Functions emulator's own
+documented ways to reach a real secret value).
+
+**Docs updated in the same pass**, not left stale:
+`docs/architecture.md`'s `structureTraces` field list (new `status` field,
+`errorMessage`'s broadened meaning, the two-phase write, the owner-read
+rule change), its "/api Function contract" section (states plainly that
+the Hosting-cutoff problem is superseded, not solved via the diagnostic
+named there), and its "Background triggers" section (full
+`processStructureTrace` contract, `gradeStructureTrace`'s own guard already
+covers the race safely from its side too). `docs/roadmap.md` moves this out
+of "Next" into "Built" and replaces it with the real follow-ups: revisit the
+small timing sample, and `scripts/diagnose-hosting-cutoff.mjs` is no longer
+a blocker, just optional confirmation of the exact upstream layer if still
+wanted.
+
+**Verified:** `npm run build` clean, `node --check functions/index.js`
+clean, `npm run eval` 67/67, `node scripts/check-secrets.mjs` clean, the
+emulator integration test passing (above, including the FieldValue fix it
+found and verified). Live verification against the real deployed site,
+after merge and deploy, is logged in a follow-up entry per this task's own
+instruction, not assumed from a clean build and a passing local test alone.
+
+### Decisions not to relitigate
+
+- The complex-transcript `502` is closed architecturally by removing the
+  long-lived HTTP request entirely, not by further tuning `timeoutSeconds`,
+  memory, or chasing the exact upstream layer. Do not revisit
+  `exports.api`'s own timeout/memory for this symptom again;
+  `processStructureTrace` runs outside Hosting's rewrite by construction.
+- `processStructureTrace`'s final write must re-read the document and guard
+  `outcome`/`outcomeAt` before merging, every time this code is touched
+  again: a blind unconditional `outcome: "pending"` reintroduces the exact
+  race this pass fixed and tested.
+- `admin.firestore.FieldValue` (the legacy namespace form) is not reliable
+  from inside a Firestore-triggered function in the local emulator,
+  reproduced twice, fixed for `logUsage` via the modular
+  `firebase-admin/firestore` import. Do not assume every other
+  `admin.firestore.FieldValue` call site in this file is emulator-safe
+  just because this one now is; each has only ever been verified against
+  real production, not the local emulator, until proven otherwise (see the
+  flagged `gradeStructureTrace` follow-up).
+- `STRUCTURE_P50_SECONDS`/`STRUCTURE_P90_SECONDS` in `SuperRambleModal.jsx`
+  are real numbers from a small (n=8) sample, not a final estimate. Update
+  them from a fresh `npm run structure:timing-stats` run as real usage
+  accumulates; do not treat them as permanently fixed constants.
+- Transcribe's elapsed-time UI is a live counter, not a percentile estimate,
+  on purpose: there is no historical data for it yet. Do not add a fixed
+  estimate for Transcribe until `scripts/structure-timing-stats.mjs`'s own
+  approach (or an equivalent) has real "transcribe phase timings" history
+  to compute one from.
+
 ## 2026-07-14: Diagnostic tool added for the direct-Cloud-Run-URL test; not run against prod in this pass
 
 The decisive remaining diagnostic named in the two entries below (calling

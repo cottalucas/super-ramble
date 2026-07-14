@@ -1589,6 +1589,13 @@ textarea:focus {
   color: var(--ds-red);
 }
 
+.voice-full-status-elapsed {
+  margin: 2px 0 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-ink-soft);
+}
+
 .voice-full-hint,
 .voice-full-status {
   margin: 0;
@@ -1608,6 +1615,19 @@ textarea:focus {
   font-size: 12px;
   margin-top: 8px;
   animation: sr-tip-fade 3400ms ease-in-out;
+}
+
+.sr-loading-estimate {
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.sr-loading-elapsed {
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
 }
 
 @keyframes sr-tip-fade {
