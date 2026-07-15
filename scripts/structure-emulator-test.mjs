@@ -35,17 +35,17 @@
 //
 // Run: EMULATOR_ALLOW_LIVE=true npm run test:structure-emulator
 //
-// A known, pre-existing, local-emulator-only issue this test can incidentally
-// surface, not something it causes or is scoped to fix: gradeStructureTrace
-// (an existing trigger, unrelated to this pass) can log an unhandled
-// "Cannot read properties of undefined (reading 'serverTimestamp')" during
-// the emulator's own shutdown drain, after this test has already reported
-// PASS and exited 0. Reproduced against the local Functions emulator only
-// (real production has an established track record of this exact call
-// succeeding); see docs/resolution-log.md's async-Structure entry for the
-// same class of issue found and fixed in this pass's own new code
-// (processStructureTrace's logUsage call), and why gradeStructureTrace's own
-// instance of it was left alone as a flagged, separate finding.
+// This test also exercises gradeStructureTrace's own write path (Test 2's
+// outcome race triggers it once processStructureTrace's final write lands),
+// which is what first surfaced a same-class bug there: an unhandled
+// "Cannot read properties of undefined (reading 'serverTimestamp')" off the
+// admin.firestore.FieldValue namespace property, local-emulator-only, fixed
+// by moving every admin.firestore.FieldValue call site in functions/index.js
+// to the modular FieldValue import already used by logUsage. See
+// docs/resolution-log.md's async-Structure entry for the original find and
+// the follow-up entry for this fix, verified by a clean run of this exact
+// test (no unhandled error during gradeStructureTrace's own execution,
+// including during the emulator's shutdown drain).
 //
 // This file plays two roles, detected by whether it is already running
 // inside the emulator suite (FIRESTORE_EMULATOR_HOST is only set by
