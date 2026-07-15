@@ -154,7 +154,9 @@ export default function TaskRow({
           ) : (
             <div className="task-content">{task.content}</div>
           )}
-          {task.description ? <div className="task-desc">{task.description}</div> : null}
+          {task.description ? (
+            <div className={`task-desc ${variant === 'card' ? 'task-desc-clamp' : ''}`}>{task.description}</div>
+          ) : null}
 
           {(meta || (task.labels && task.labels.length) || showProject) && (
             <div className="task-meta">

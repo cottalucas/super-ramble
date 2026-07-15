@@ -160,7 +160,7 @@ function Shell() {
           />
         </>
       )}
-      <main className="content">
+      <main className={`content ${sidebarVisible ? '' : 'sidebar-hidden'}`}>
         {view.type === 'today' ? <TodayView /> : null}
         {view.type === 'upcoming' ? <UpcomingView /> : null}
         {view.type === 'project' ? <ProjectView view={view} /> : null}

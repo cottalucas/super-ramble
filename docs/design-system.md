@@ -289,6 +289,24 @@ always gets List, regardless of the user's stored Layout preference
 See docs/resolution-log.md, 2026-07-08, for what was checked and what broke
 before the fix.
 
+**`.sidebar-reveal`'s own crowding fix, reopened 2026-07-15 for the
+non-phone case.** The phone-width rule above already reserves clearance
+for this button by bumping `.content-inner`'s left padding to 56px; that
+rule is scoped to `@media (max-width: 640px)` because on a phone the
+sidebar is always the mobile overlay. But the same button also renders any
+time a desktop user manually hides the sidebar (`App.jsx`'s toggle,
+independent of viewport width), and nothing outside the phone media query
+gave it clearance: `.content-inner`'s own top padding (36px) was never
+enough, the button's bottom edge (46px) sat below the heading's own top
+edge, reproduced live at both 750px and 1280px viewport widths (the phone
+fix's horizontal clearance was never the issue at these widths; the
+vertical one was, and no rule addressed it at all outside 640px). Fixed
+with `.content.sidebar-hidden .content-inner { padding-top: 56px }`,
+`sidebar-hidden` a new class `App.jsx` puts on `.content` whenever the
+reveal button is showing, at any width, reusing the exact 56px figure the
+phone rule already verified against a screenshot for this same button
+rather than guessing a second number.
+
 ## Landing / signed-out gate
 
 `App.jsx`'s `Gate()`, signed out: a real two-side split view (`.landing`),
@@ -403,15 +421,63 @@ left-aligned button styling rather than inventing a new one):
   reachable exactly where it already lives, `SettingsModal.jsx`'s Theme
   section, one click further in through this new Settings row (or the gear
   icon, unchanged).
-- **Log out**, real (non-local) accounts only, matching the `isLocal` guard
-  `SettingsModal.jsx`'s own Account-section sign-out control already uses.
+- **Log out**, real (non-local) accounts only, gated on the same `isLocal`
+  check every other local-preview-only control in this app already uses.
   Opens the same confirm-before-sign-out flow, "Signing out doesn't delete
   anything. Sign in again anytime to see your tasks." (`ConfirmDialog`,
   the exact copy the 2026-07-10 sign-out-copy fix already set), not a second
   wording and not an instant sign-out with no confirm step. Local preview
   hides this row entirely rather than showing a control that would do
-  nothing, the same treatment `SettingsModal.jsx`'s Account section already
-  gives it.
+  nothing.
+
+**This is now the only sign-out control in the app, as of 2026-07-15.**
+`SettingsModal.jsx`'s Account section used to carry its own separate "Sign
+out" button and `ConfirmDialog`, a second, duplicate copy of exactly this
+flow. Verified independent (its own `confirmSignOut` state, its own
+`doSignOut` calling `signOut()` directly, no shared state with this menu)
+before removing it outright: a settings screen showing an account's own
+sign-out control is a common enough pattern elsewhere that it looked
+intentional rather than leftover, but this app already had the real one
+here. Do not re-add a Sign out control to `SettingsModal.jsx`'s Account
+section; this avatar-menu row is where it lives.
+
+## Settings modal
+
+`SettingsModal.jsx`'s two-pane chrome (left category nav, right detail pane)
+predates this entry; **the row and spacing rhythm inside it, and the active
+nav-item state, were reworked 2026-07-15**, reported directly against a real
+Todoist settings screenshot (described by Lucas, not attached as an image;
+no live Todoist session was reachable this pass either, so treat these as a
+verified-by-description pass, not a pixel-measured one):
+
+- **Active nav item is red text only** (`.settings-nav-item.active`), no
+  background fill or outline. A tinted background box (this app's prior
+  treatment) reads as a bigger, louder active state than Todoist's own,
+  which only shifts the label's color. Still gets the ordinary `:hover`
+  tint like every other row; that is independent of the active state, not a
+  conflict with it.
+- **Nav rows** stay a plain list, no dividers between them, `13px 10px`
+  padding (bumped from `7px 10px` for more comfortable row height).
+- **Right-pane rows are label-above-value**, not label-left-value-right: a
+  small muted-gray label line (`.settings-label`, 12px), the value or
+  control directly below it (`.settings-value`), left-aligned, no colon.
+  `.settings-row` is a column flex, not a row flex, because of this.
+- **A row with an inline action** (Todoist's Status/Connect-or-Disconnect)
+  adds `.settings-row-inline` on top of `.settings-row`: the label+value
+  block and the button share one line, button flush right, instead of
+  stacking three deep.
+- **Buttons stay the existing quiet/ghost style** (`.btn-quiet`) throughout,
+  including Disconnect: Todoist's own reference reserves an outlined-red
+  button for a truly destructive, hard-to-undo action (their "Delete
+  account"), and this app has no equivalent in Settings once Sign out moved
+  out (see "Sidebar avatar menu" above). Disconnecting Todoist is
+  reversible (reconnect any time) and does not delete local data, so it
+  stays quiet rather than inventing a new red-outline button variant for a
+  case that does not need it. Introduce that variant only if a real
+  destructive Settings action is ever added.
+- **Section spacing** (`.settings-section`) is `28px 0` (up from `24px 0`),
+  matching a more generous block rhythm than this app's own list-row
+  spacing elsewhere; a settings screen reads as a form, not a task list.
 
 ## Copy rules (stop-slop)
 

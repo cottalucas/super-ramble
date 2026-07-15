@@ -22,65 +22,86 @@ const emptyChildren = new Map();
 // to.../Delete menu, and a trailing "+ Add section" column. Today and
 // Upcoming's Board never pass it, so their fixed columns (Overdue/Today, or
 // one per day) are unaffected. See docs/resolution-log.md.
+//
+// Cross-column drop preview: `dragPreview` is `{ colKey, taskId }`, `taskId`
+// null meaning "append at the end of this column." Drawn as `.drop-before`
+// on the row itself (TaskRow's own dragPreview prop, the same box-shadow
+// technique ProjectView's List layout and Sidebar's project tree already
+// use) or `.drop-placeholder` in the column's own fixed end-zone (past the
+// last card, TaskList.jsx's own pattern), never a mounted/unmounted
+// placeholder among the real cards: that shifts every card below it and can
+// move the hovered card out from under a stationary cursor, which is
+// exactly the bug that made real drops silently no-op. Replaces the old
+// whole-column `.drag-over-col` dashed outline, which only reported
+// "dragging over this column at all," not where. See docs/resolution-log.md,
+// 2026-07-10 (the drag-and-drop reliability fix) and 2026-07-15 (this pass).
+// Board never nests a card under another (every TaskRow here renders at
+// depth 0 with no children), so the bottom half of a hovered row means
+// "insert after this card" (i.e. before its next sibling, or at the end if
+// it's the last card), never "nest," unlike TaskRow's other position-aware
+// caller (ProjectView's List layout). Hover never writes; only a drop reads
+// the last `dragPreview`, the same rule TaskList.jsx's own
+// `handlePositionDrop` already follows. Cross-column writes still land at
+// column granularity through `onCrossColumnDrop`, unchanged from before this
+// pass: several callers (Today's Overdue column, Upcoming's "Date added"
+// group) treat a cross-column drop as a deliberate no-op for reasons
+// specific to that column, and there is no reliable signal here for
+// distinguishing a real write from one of those no-ops, so layering a
+// second, row-precise `order` write on top would risk quietly reordering a
+// column that was never meant to be a drop target at all. Only a genuine
+// same-column reorder (below) is order-precise, exactly as it already was.
 export default function Board({ columns, onReorder, onCrossColumnDrop, onAddTask, projectById, actions, sectionOps }) {
   const [dragId, setDragId] = useState(null);
   const [dragFromCol, setDragFromCol] = useState(null);
-  const [dragOverTaskId, setDragOverTaskId] = useState(null);
-  const [dragOverColKey, setDragOverColKey] = useState(null);
+  const [dragPreview, setDragPreview] = useState(null);
 
   function endDrag() {
     setDragId(null);
     setDragFromCol(null);
-    setDragOverTaskId(null);
-    setDragOverColKey(null);
+    setDragPreview(null);
   }
 
-  async function dropOnTask(col, targetTask) {
+  function handleRowDragOver(col, task, zone) {
+    if (zone === 'nest') {
+      const idx = col.tasks.findIndex((t) => t.id === task.id);
+      const next = idx === -1 ? null : col.tasks[idx + 1];
+      setDragPreview({ colKey: col.key, taskId: next ? next.id : null });
+      return;
+    }
+    setDragPreview({ colKey: col.key, taskId: task.id });
+  }
+
+  function handleRowDragLeave(col, task) {
+    setDragPreview((cur) => (cur && cur.colKey === col.key && cur.taskId === task.id ? null : cur));
+  }
+
+  async function handleDrop() {
     const fromId = dragId;
     const fromCol = dragFromCol;
+    const preview = dragPreview;
     endDrag();
-    if (!fromId || fromId === targetTask.id) return;
+    if (!fromId || !preview) return;
+    const col = columns.find((c) => c.key === preview.colKey);
+    if (!col || fromId === preview.taskId) return;
 
     if (fromCol === col.key) {
       const ids = col.tasks.map((t) => t.id);
       const from = ids.indexOf(fromId);
-      const to = ids.indexOf(targetTask.id);
-      if (from === -1 || to === -1) return;
+      if (from === -1) return;
       const reordered = [...col.tasks];
       const [moved] = reordered.splice(from, 1);
-      reordered.splice(to, 0, moved);
+      const targetIndex = preview.taskId ? reordered.findIndex((t) => t.id === preview.taskId) : reordered.length;
+      reordered.splice(targetIndex === -1 ? reordered.length : targetIndex, 0, moved);
       await onReorder(col.key, reordered);
       return;
     }
     await onCrossColumnDrop(fromId, fromCol, col.key);
   }
 
-  async function dropOnColumn(col) {
-    const fromId = dragId;
-    const fromCol = dragFromCol;
-    endDrag();
-    if (!fromId || fromCol === col.key) return;
-    await onCrossColumnDrop(fromId, fromCol, col.key);
-  }
-
   return (
     <div className="board">
       {columns.map((col) => (
-        <div
-          key={String(col.key)}
-          className={`board-col ${dragId && dragOverColKey === col.key ? 'drag-over-col' : ''}`}
-          onDragOver={(e) => {
-            if (!dragId) return;
-            e.preventDefault();
-            setDragOverColKey(col.key);
-          }}
-          onDragLeave={() => setDragOverColKey((cur) => (cur === col.key ? null : cur))}
-          onDrop={(e) => {
-            if (!dragId) return;
-            e.preventDefault();
-            dropOnColumn(col);
-          }}
-        >
+        <div key={String(col.key)} className="board-col">
           {col.section && sectionOps?.editingSectionId === col.section.id ? (
             <SectionForm
               initial={{ name: col.section.name, description: col.section.description }}
@@ -122,17 +143,33 @@ export default function Board({ columns, onReorder, onCrossColumnDrop, onAddTask
                 onAddSub={actions.onAddSub}
                 variant="card"
                 draggable
-                dragOver={dragOverTaskId === t.id && dragId !== t.id}
+                dragPreview={dragPreview?.colKey === col.key && dragPreview.taskId === t.id ? { kind: 'before', taskId: t.id } : null}
                 onDragStartRow={(task) => {
                   setDragId(task.id);
                   setDragFromCol(col.key);
                 }}
-                onDragOverRow={(task) => setDragOverTaskId(task.id)}
-                onDragLeaveRow={(task) => setDragOverTaskId((cur) => (cur === task.id ? null : cur))}
-                onDropRow={(task) => dropOnTask(col, task)}
+                onDragOverRow={(task, zone) => handleRowDragOver(col, task, zone)}
+                onDragLeaveRow={(task) => handleRowDragLeave(col, task)}
+                onDropRow={handleDrop}
                 onDragEndRow={endDrag}
               />
             ))}
+            <div
+              className="task-list-end-zone"
+              onDragOver={(e) => {
+                if (!dragId) return;
+                e.preventDefault();
+                setDragPreview({ colKey: col.key, taskId: null });
+              }}
+              onDragLeave={() => setDragPreview((cur) => (cur && cur.colKey === col.key && cur.taskId === null ? null : cur))}
+              onDrop={(e) => {
+                if (!dragId) return;
+                e.preventDefault();
+                handleDrop();
+              }}
+            >
+              {dragPreview?.colKey === col.key && dragPreview.taskId === null ? <div className="drop-placeholder" /> : null}
+            </div>
           </div>
           {onAddTask ? (
             <button type="button" className="add-line" onClick={() => onAddTask(col)}>
