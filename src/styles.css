@@ -146,6 +146,21 @@ textarea {
   padding: 36px 48px 120px;
 }
 
+/* Same reveal-button crowding the phone-width rule below already fixes
+   (.sidebar-reveal, fixed, top/left 14px, ~32px box), reproduced live at
+   desktop widths too: manually hiding the sidebar (App.jsx's toggle, not
+   just the phone overlay) leaves the button sitting almost on top of the
+   view heading, since .content-inner's own 36px top padding was never
+   enough clearance for it at any width, only the mobile media query below
+   happened to add extra padding for its own separate reason. .content
+   carries `sidebar-hidden` (App.jsx) whenever the reveal button is showing,
+   at any width, so this reuses the exact 56px figure already verified
+   against a screenshot for the same button instead of guessing a second
+   number. */
+.content.sidebar-hidden .content-inner {
+  padding-top: 56px;
+}
+
 /* ---------- Responsive (phone width) ----------
    Below this breakpoint the sidebar can't sit as a fixed-width flex sibling
    without squeezing the content column unusably; App.jsx's Shell renders it
@@ -537,7 +552,7 @@ textarea {
   border: 0;
   background: transparent;
   text-align: left;
-  padding: 7px 10px;
+  padding: 13px 10px;
   border-radius: var(--radius);
   color: var(--ds-ink);
   font-size: 14px;
@@ -547,10 +562,13 @@ textarea {
   background: color-mix(in srgb, var(--ds-ink) 4%, transparent);
 }
 
+/* Red text only, no fill or outline: reported directly against a real
+   Todoist settings screenshot, 2026-07-15. A tinted background box (the
+   prior treatment here) reads as a bigger, louder active state than
+   Todoist's own, which only shifts the label's color. */
 .settings-nav-item.active {
-  background: var(--ds-red-tint);
   color: var(--ds-red);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .settings-detail {
@@ -567,7 +585,7 @@ textarea {
 }
 
 .settings-section {
-  padding: 24px 0;
+  padding: 28px 0;
   border-top: 1px solid var(--ds-line);
 }
 
@@ -577,32 +595,51 @@ textarea {
 }
 
 .settings-heading {
-  margin: 0 0 18px;
+  margin: 0 0 20px;
   font-size: 20px;
   font-weight: 700;
   color: var(--ds-ink);
 }
 
+/* Label above value, not label-left-value-right: matches a real Todoist
+   settings row, reported directly against a screenshot, 2026-07-15. A row
+   that also carries an inline action (Todoist's Status/Connect) adds
+   .settings-row-inline on top, putting the label+value block and the
+   button on one line, button flush right, instead of stacking three deep. */
 .settings-row {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0;
   font-size: 14px;
+}
+
+.settings-row-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-row-inline > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .settings-label {
   color: var(--ds-ink-soft);
+  font-size: 12px;
+}
+
+.settings-value {
+  color: var(--ds-ink);
 }
 
 .settings-note {
-  margin: 0;
+  margin: 12px 0 0;
   color: var(--ds-ink-soft);
   font-size: 13px;
-}
-
-.settings-signout {
-  margin-top: 10px;
 }
 
 .settings-theme-toggle {
@@ -638,7 +675,7 @@ textarea {
 }
 
 .view-title {
-  font-size: 22px;
+  font-size: 30px;
   font-weight: 700;
   margin: 0;
   flex: 0 1 auto;
@@ -824,6 +861,16 @@ textarea {
   color: var(--ds-ink-soft);
   font-size: 13px;
   margin-top: 2px;
+}
+
+/* Card variant only (Board, Today, Upcoming): a long description would
+   otherwise grow the card unbounded. Full description still shows
+   unclamped in TaskDetail.jsx; this is a card-display-only limit. */
+.task-desc-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .task-meta {
@@ -1041,11 +1088,6 @@ textarea {
   border-radius: 8px;
 }
 
-.agenda-section.drag-over-section {
-  outline: 2px dashed var(--ds-red);
-  outline-offset: 4px;
-}
-
 /* ---------- Upcoming: Board layout, phase 2's restored horizontal window ---------- */
 .upcoming-board-scroll {
   display: flex;
@@ -1078,11 +1120,6 @@ textarea {
   margin-left: 6px;
 }
 
-.day-col.drag-over-section {
-  outline: 2px dashed var(--ds-red);
-  outline-offset: -2px;
-}
-
 /* ---------- Board layout: Inbox, Project, Today ---------- */
 .board {
   display: flex;
@@ -1105,11 +1142,6 @@ textarea {
 
 .board-col:first-child {
   padding-left: 0;
-}
-
-.board-col.drag-over-col {
-  outline: 2px dashed var(--ds-red);
-  outline-offset: -2px;
 }
 
 .board-col-head {
@@ -1798,6 +1830,31 @@ textarea:focus {
 .detail-desc {
   margin-top: 8px;
   font-size: 13px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.detail-saved {
+  display: block;
+  font-size: 12px;
+  color: var(--ds-ink-soft);
+  margin-top: 4px;
+  animation: detail-saved-fade 1.5s ease;
+}
+
+@keyframes detail-saved-fade {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 .detail-add-sub {

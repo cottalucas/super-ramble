@@ -41,8 +41,16 @@ export default function UpcomingView() {
   const [groupMode, setGroupMode] = useState('none');
   const [sortMode, setSortMode] = useState('manual');
   const [dragTaskId, setDragTaskId] = useState(null);
-  const [dragOverRowId, setDragOverRowId] = useState(null);
-  const [dragOverSectionKey, setDragOverSectionKey] = useState(null);
+  // `{ sectionKey, taskId }`, `taskId` null meaning "append at the end of
+  // this day's list." Same shape and same reasoning as Board.jsx's own
+  // dragPreview: drawn as `.drop-before` on the hovered row (TaskRow's own
+  // dragPreview prop) or `.drop-placeholder` in a fixed end-zone past the
+  // last row, never a mounted/unmounted placeholder among real rows. This
+  // day/agenda section never nests a row under another, so a row's bottom
+  // half means "insert after this row," never "nest." Replaces the old
+  // whole-section `.drag-over-section` dashed outline. See
+  // docs/resolution-log.md, 2026-07-10 and 2026-07-15.
+  const [dragPreview, setDragPreview] = useState(null);
   // Which day's "+ Add task" line, if any, is expanded inline right now: null
   // or an ISO date string. See docs/design-system.md.
   const [addingTaskFor, setAddingTaskFor] = useState(null);
@@ -112,16 +120,38 @@ export default function UpcomingView() {
     // groupMode === 'createdAt': no-op, not a drag-writable field.
   }
 
-  async function handleDrop(targetTask, targetKey) {
+  function handleRowDragOver(sectionKey, task, zone) {
+    const list = listsByKey.get(sectionKey) || [];
+    if (zone === 'nest') {
+      const idx = list.findIndex((t) => t.id === task.id);
+      const next = idx === -1 ? null : list[idx + 1];
+      setDragPreview({ sectionKey, taskId: next ? next.id : null });
+      return;
+    }
+    setDragPreview({ sectionKey, taskId: task.id });
+  }
+
+  function handleRowDragLeave(sectionKey, task) {
+    setDragPreview((cur) => (cur && cur.sectionKey === sectionKey && cur.taskId === task.id ? null : cur));
+  }
+
+  // Hover never writes; only a drop reads the last dragPreview, the same
+  // rule TaskList.jsx's own handlePositionDrop and Board.jsx's own
+  // handleDrop already follow. Covers both a drop on a specific row and a
+  // drop past the last row or into an empty day (dragPreview.taskId null),
+  // replacing the old handleDrop/handleDropOnSection split.
+  async function handleDrop() {
     const fromId = dragTaskId;
+    const preview = dragPreview;
     setDragTaskId(null);
-    setDragOverRowId(null);
-    if (!fromId || fromId === targetTask.id) return;
+    setDragPreview(null);
+    if (!fromId || !preview || fromId === preview.taskId) return;
 
     const fromTask = tasks.find((t) => t.id === fromId);
     if (!fromTask) return;
 
     const fromKey = sectionKeyFor(fromTask);
+    const targetKey = preview.sectionKey;
 
     if (fromKey === targetKey) {
       // Same section: reorder that list only, same mechanics as phase 2.6.
@@ -132,11 +162,11 @@ export default function UpcomingView() {
       const list = listsByKey.get(targetKey) || [];
       const ids = list.map((t) => t.id);
       const from = ids.indexOf(fromId);
-      const to = ids.indexOf(targetTask.id);
-      if (from === -1 || to === -1) return;
+      if (from === -1) return;
       const reordered = [...list];
       const [moved] = reordered.splice(from, 1);
-      reordered.splice(to, 0, moved);
+      const targetIndex = preview.taskId ? reordered.findIndex((t) => t.id === preview.taskId) : reordered.length;
+      reordered.splice(targetIndex === -1 ? reordered.length : targetIndex, 0, moved);
       await Promise.all(
         reordered.map((t, i) => (t.order === i ? null : store.updateTask(t.id, { order: i })))
       );
@@ -152,23 +182,6 @@ export default function UpcomingView() {
     }
 
     // Cross-day: reschedule, keeping time of day if the task had one.
-    await store.updateTask(fromId, { due: rescheduleDue(fromTask.due, targetKey) });
-    await bump();
-  }
-
-  // Drop on the section itself, not a specific row: the only way to reschedule
-  // onto a day that currently has no tasks to drop onto. Row-level drops stop
-  // propagation, so this only fires when the drop lands outside every row.
-  async function handleDropOnSection(targetKey) {
-    const fromId = dragTaskId;
-    setDragTaskId(null);
-    setDragOverSectionKey(null);
-    if (!fromId) return;
-
-    const fromTask = tasks.find((t) => t.id === fromId);
-    if (!fromTask) return;
-    if (sectionKeyFor(fromTask) === targetKey) return; // nothing to reorder against
-
     await store.updateTask(fromId, { due: rescheduleDue(fromTask.due, targetKey) });
     await bump();
   }
@@ -190,15 +203,14 @@ export default function UpcomingView() {
         }
         variant="card"
         draggable
-        dragOver={dragOverRowId === t.id && dragTaskId !== t.id}
+        dragPreview={dragPreview?.sectionKey === sectionKey && dragPreview.taskId === t.id ? { kind: 'before', taskId: t.id } : null}
         onDragStartRow={(task) => setDragTaskId(task.id)}
-        onDragOverRow={(task) => setDragOverRowId(task.id)}
-        onDragLeaveRow={(task) => setDragOverRowId((cur) => (cur === task.id ? null : cur))}
-        onDropRow={(task) => handleDrop(task, sectionKey)}
+        onDragOverRow={(task, zone) => handleRowDragOver(sectionKey, task, zone)}
+        onDragLeaveRow={(task) => handleRowDragLeave(sectionKey, task)}
+        onDropRow={handleDrop}
         onDragEndRow={() => {
           setDragTaskId(null);
-          setDragOverRowId(null);
-          setDragOverSectionKey(null);
+          setDragPreview(null);
         }}
       />
     );
@@ -210,17 +222,17 @@ export default function UpcomingView() {
     return (
       <div
         key={iso}
-        className={`${extraCls} ${dragOverSectionKey === iso ? 'drag-over-section' : ''}`}
+        className={extraCls}
         onDragOver={(e) => {
           if (!dragTaskId) return;
           e.preventDefault();
-          setDragOverSectionKey(iso);
+          setDragPreview({ sectionKey: iso, taskId: null });
         }}
-        onDragLeave={() => setDragOverSectionKey((cur) => (cur === iso ? null : cur))}
+        onDragLeave={() => setDragPreview((cur) => (cur && cur.sectionKey === iso && cur.taskId === null ? null : cur))}
         onDrop={(e) => {
           if (!dragTaskId) return;
           e.preventDefault();
-          handleDropOnSection(iso);
+          handleDrop();
         }}
       >
         {layout === 'board' ? (
@@ -233,6 +245,9 @@ export default function UpcomingView() {
           </div>
         )}
         {dayTasks.length ? <div className="task-list">{dayTasks.map((t) => renderRow(t, iso))}</div> : null}
+        <div className="task-list-end-zone">
+          {dragPreview?.sectionKey === iso && dragPreview.taskId === null ? <div className="drop-placeholder" /> : null}
+        </div>
         {addingTaskFor === iso ? (
           <InlineTaskAdd
             defaults={{

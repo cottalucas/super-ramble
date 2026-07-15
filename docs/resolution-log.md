@@ -3,6 +3,245 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-15: UI polish pass, eight items: card truncation, description cap, autosave indicator, drag-and-drop indicator, redundant Sign Out removed, Settings chrome, page title, sidebar-collapsed spacing
+
+Eight scoped items, one branch, all `src/` only; no `src/pipeline/` or
+`functions/` file touched. `docs/` set read fresh first per
+`docs/orchestration.md`, including the 2026-07-10 drag-and-drop entry before
+touching any drag code, as instructed.
+
+**Item 1: card description truncation.** `TaskRow.jsx`'s `.task-desc` gets a
+new `.task-desc-clamp` class, `variant === 'card'` only (`display: -webkit-box;
+-webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden`).
+Verified live on Board cards (Today, Upcoming, and a Project board column): a
+long description clips to 3 lines with an ellipsis, the card does not grow
+unbounded. Flat variant (Inbox, Project List) is unaffected by design, and
+verified unaffected live too. Full description still renders unclamped in
+`TaskDetail.jsx`. Line count (3) is a reasoned default, not measured against
+a screenshot; no reference was available this pass (see the Settings/title
+note below on why).
+
+**Item 2: TaskDetail description textarea capped.** `.detail-desc` gets
+`max-height: 160px; overflow-y: auto`. `autoResize` (`TaskDetail.jsx`) is
+unchanged: it still sets `el.style.height` to the full `scrollHeight`, but
+CSS `max-height` clamps the *used* height regardless of the inline style, so
+the box stops growing past 160px and scrolls internally past that point.
+Verified live: typed a 15-line description, confirmed via
+`getComputedStyle` that `clientHeight` stays 160 while `scrollHeight` grows
+past it (244px at 15 lines), and confirmed visually that sub-tasks and the
+comment box stay in place below the capped field instead of being pushed
+out of frame. 160px (roughly 6-7 lines at this field's 13px font) is a
+reasoned default, not measured against a screenshot. `.detail-body`'s own
+80vh budget (`styles.css`) was re-checked after this change: still correct,
+unchanged, since capping the description can now only ever reduce
+`.detail-body`'s total content height, never grow it further.
+
+**Item 3: autosave "Saved" indicator.** `TaskDetail.jsx` gains `justSaved`
+state and a `flashSaved()` helper, called only from the debounced
+content/description save paths (`onContentChange`/`onDescriptionChange`),
+not from the rail's immediate-save fields (Date, Priority, Labels, Project),
+which already had no debounce to confirm. Renders `<span className="detail-saved">Saved</span>`
+right after the description field for 1.5s (`detail-saved-fade`
+keyframes, opacity 0 to 1 to 0), then unmounts. Verified live with a
+`MutationObserver` watching for the node's add/remove, not just a screenshot
+timed by hand: a manual screenshot repeatedly missed the ~2 second window
+(500ms debounce plus a real Firestore round trip, this environment is
+signed into a real account, not local-store) before I switched to the
+observer, which confirmed the node mounts and unmounts on the expected
+cadence tied to the real save resolving, not just the debounce timer.
+
+**Item 4: Board and day-section drag-and-drop, position-aware indicator.**
+`Board.jsx`'s `.board-col.drag-over-col` (a whole-column dashed outline,
+boolean "dragging over this column at all") is gone, along with the
+matching `.day-col.drag-over-section`/`.agenda-section.drag-over-section`
+in `UpcomingView.jsx`'s own day-section drag (the same crude pattern, reused
+by both its List agenda rendering and its Board day-columns, since both
+share one `daySection`/`renderRow` implementation). Replaced in both files
+with the same `dragPreview`-driven, box-shadow technique `TaskList.jsx`'s
+`positionAware` mode already established: a `{ colKey/sectionKey, taskId }`
+state, `taskId` null meaning "append at the end of this list," drawn as
+`.drop-before` on the hovered row (`TaskRow.jsx`'s own `dragPreview` prop,
+unchanged) or `.drop-placeholder` inside a fixed end-zone past the last row
+(`.task-list-end-zone`, also unchanged, TaskList's own pattern). No mounted
+or unmounted placeholder among real rows anywhere in this change, per the
+2026-07-10 entry's explicit warning: that is the exact bug that made real
+drops silently no-op the first time this was tried.
+
+Neither Board nor a day-section ever nests one row under another (Board's
+`TaskRow` calls always render at `depth={0}` with an empty `childrenOf`;
+the day-section rows are the same), so `TaskRow`'s bottom-half-of-a-row
+zone (`'nest'`) is reinterpreted in both callers as "insert after this row"
+(before its next sibling, or at the end if it's the last row), never as an
+actual nest. This is a real reuse of TaskRow's own top/bottom-half math, not
+a new gesture.
+
+**Write semantics, a deliberate scope decision.** A same-column (or
+same-day) reorder is fully position-precise, using the dropped-on row's
+exact index, same as before this pass. A cross-column (or cross-day) drop's
+*field* write (section, priority, date, or reschedule) is unchanged from
+before, still column-granularity, not also writing the moved row's exact
+`order` within the destination list. Considered making cross-column drops
+order-precise too, to fully match the visual promise, and deliberately did
+not: several existing callers treat a cross-column drop as an intentional
+no-op for column-specific reasons (Today's Overdue column, Upcoming's "Date
+added" group), and there is no reliable signal at the Board/day-section
+level for telling a real write apart from one of those no-ops. Layering a
+second, row-precise `order` write on top risked quietly reordering a column
+that was never meant to be a drop target at all. If a future pass wants
+order-precise cross-column drops, it needs to plumb a real success/no-op
+signal back from each of the `onCrossColumnDrop` callers first (`ProjectView.jsx`,
+`TodayView.jsx` x2, `UpcomingView.jsx`), not just add the write blind.
+
+**Verified with the shape the 2026-07-10 entry requires, not the shortcut it
+warns against.** Real mouse-driven `left_click_drag` does not trigger native
+HTML5 drag events in this browser automation tool at all (confirmed: no
+visible effect). Used the same fix as that entry describes for its own
+`preview_eval` shortcut: dispatched real `DragEvent`s (`dragstart`, two
+`dragover` events ~40-45ms apart, `drop`, `dragend`) with a real
+`DataTransfer`, against the live DOM. Confirmed, reading actual results, not
+just the UI:
+
+- A same-column drag (Today board, "Stand-up call" onto "Renew passport,"
+  top half) showed `.drop-before` on the target with zero layout shift
+  (compared every other row's `getBoundingClientRect().top` before and
+  during the hover: identical), then committed to the exact position shown
+  on drop (read the resulting DOM order back, not just the indicator).
+- A cross-column drag (Today board, "Review PR" from Overdue into the empty
+  Today column's end-zone) showed `.drop-placeholder` in the fixed end-zone,
+  then committed: Overdue lost the card, Today gained it.
+- A cross-day drag (Upcoming board, "Review PR" from today into tomorrow's
+  end-zone) committed the same way, confirmed via the resulting day
+  columns' contents.
+
+All three tests ran against this environment's own real signed-in account
+(not local-store), so every test mutation (descriptions, due dates, manual
+order) was reverted afterward, live, back to its original value, rather
+than left as test residue in real data.
+
+**Item 5: redundant Sign Out removed from Settings.** Verified first, not
+assumed: `Sidebar.jsx`'s avatar-menu "Log out" row has its own
+`confirmSignOut` state, its own `doSignOut` (calls `signOut()` from
+`useAuth()` directly), and its own `ConfirmDialog`, sharing no state with
+`SettingsModal.jsx`. Removed `SettingsModal.jsx`'s duplicate entirely: the
+`confirmSignOut` state, `doSignOut`, the "Sign out" button, and its
+`ConfirmDialog` block; `signOut` dropped from its `useAuth()` destructure
+too, now unused there. Verified live after removal: the sidebar avatar
+menu's "Log out" still opens the same confirm dialog ("Signing out doesn't
+delete anything...") independent of Settings. `docs/design-system.md`'s
+"Sidebar avatar menu" section updated in the same pass: it used to point at
+`SettingsModal.jsx`'s Account-section control as the pattern this row
+matched; that control no longer exists, so the section now states plainly
+that the avatar-menu row is the only sign-out control in the app, and a
+future pass should not re-add one to Settings.
+
+**Item 6: Settings modal chrome, reworked against a description of a real
+Todoist screenshot.** No image was actually attached this pass (the task
+referenced "the attached reference screenshot," and separately asked for a
+live Todoist comparison for item 7); flagged before starting, the same
+standing rule the 2026-07-10 chip-row entry already established (a written
+description is not a substitute for the real screenshot, but here Lucas
+supplied a detailed direct description in response to being asked, which is
+a different, legitimate source, not a guess on my part). Changed, all
+reported directly against that description:
+
+- `.settings-nav-item.active`: red text only, no background fill, replacing
+  a tinted background box.
+- `.settings-row`: label-above-value (a column flex), not
+  label-left-value-right (a row flex). New `.settings-row-inline` modifier
+  for a row that also carries a same-line action (Todoist's
+  Status/Connect-or-Disconnect), button flush right.
+- Todoist's own action buttons (Connect, Disconnect) stay the existing
+  `.btn-quiet` style; did not introduce an outlined-red "destructive"
+  button variant, since neither action is actually destructive in this
+  app (both reversible, no local data deleted) and nothing else in
+  Settings needs one after item 5.
+- Nav row padding `7px 10px` to `13px 10px`; section padding `24px 0` to
+  `28px 0`.
+
+`docs/design-system.md` gained a new "Settings modal" section recording all
+of the above, since no such section existed before this pass despite the
+modal's two-pane chrome itself predating it. Verified live at all three
+categories (Account, Theme, Todoist), both hover and active nav states.
+
+**Item 7: page title.** `ProjectView.jsx`'s `IconInbox` next to the Inbox
+title is gone (the `project.isInbox` branch now renders nothing instead of
+the icon); the colored dot next to a regular project's own title is
+untouched, per `docs/design-system.md`'s already-settled answer that real
+Todoist does render a dot there (not nothing, not a hash), so this did not
+need a new live check. `.view-title` font-size: 22px to 30px. **Not a
+pixel-measured number.** Item 7 asked for a live comparison against real
+Todoist's own rendered heading; no live, signed-in Todoist session was
+reachable this pass (Claude in Chrome was not connected). Asked Lucas
+directly rather than guessing; he supplied a direct visual comparison
+("closer to 28-32px bold," explicitly flagged as his own best read, not a
+measured pixel value). Implemented the midpoint, 30px, and noted here as a
+reasoned estimate from a real side-by-side look, not a measured or guessed
+number. A three-tier title/meta-line/section-header hierarchy was also
+described (a small muted task-count line between the page title and section
+headers, with a checkmark icon) but not built this pass: it is a new
+element with real open questions (which task count, on every view or just
+Today, whether it does anything on click) that the original item 7 scope
+(icon removal, font-size) did not cover, and building it half-specified
+would be exactly the kind of guess this section is trying to avoid. Left
+open for a future pass with an explicit spec.
+
+**Item 8: sidebar-collapsed spacing, reproduced live, not assumed.**
+Reproducing this directly (toggle `.sidebar-reveal` at several viewport
+widths, screenshot and measure, not read the CSS alone) found the actual
+bug: `.content-inner`'s own top padding (36px) never left clearance for the
+fixed reveal button (bottom edge at 46px), so the view heading sat almost
+directly against it, at every non-phone width, not just a narrow one, since
+`.content-inner` always starts at the same vertical offset regardless of
+the horizontal centering `--content-max` drives. This is the same crowding
+the phone-width media query rule already fixed once (56px left padding,
+`docs/design-system.md`'s "Responsive" section), but that rule is scoped to
+`max-width: 640px` because a phone always shows the mobile overlay instead
+of this button; nothing covered the case of a desktop user manually hiding
+the sidebar (`App.jsx`'s own toggle, any viewport width). Fixed with a new
+`sidebar-hidden` class `App.jsx` now puts on `.content` whenever the reveal
+button renders, and `.content.sidebar-hidden .content-inner { padding-top:
+56px }`, reusing the exact figure the phone rule already verified against a
+screenshot for this same button. Verified live, before/after, at 750px and
+1280px viewport widths: the heading now clears the button by a comfortable
+margin at both, and re-expanding the sidebar afterward showed no residual
+shift.
+
+**Standard loop.** `npm run build` clean. `npm run eval` green: 18/18
+offline Structure, 12/12 date, 26/26 Todoist, 11/11 write,
+`check:prompt-sync` passed (none of these suites touch anything this pass
+changed; run anyway per the loop's definition of done).
+`node scripts/check-secrets.mjs` passed. No `src/pipeline/` or `functions/`
+file touched.
+
+### Decisions not to relitigate
+
+- The box-shadow/end-zone drag-preview technique (`docs/resolution-log.md`,
+  2026-07-10) now covers every drag surface in this app: `TaskList.jsx`'s
+  own rows, `Sidebar.jsx`'s `ProjectNode`, and as of this pass, `Board.jsx`'s
+  columns and `UpcomingView.jsx`'s day-sections too. No remaining drag
+  surface uses a mounted/unmounted placeholder among real rows; do not
+  introduce one for a future drag feature either.
+- Cross-column/cross-day drag drops stay column-granularity for their write
+  (see item 4 above); do not add row-precise ordering there without first
+  plumbing a real success/no-op signal back from each `onCrossColumnDrop`
+  caller.
+- `SettingsModal.jsx`'s Account section does not get its own Sign out
+  control again; `Sidebar.jsx`'s avatar-menu "Log out" is the one sign-out
+  control in this app (see item 5 and `docs/design-system.md`'s "Sidebar
+  avatar menu" section).
+- `.settings-row` is label-above-value, a column flex; do not revert to
+  label-left-value-right without a new, equally explicit decision, per
+  `docs/design-system.md`'s new "Settings modal" section.
+- `.view-title`'s 30px and `.detail-desc`'s 160px cap are both reasoned
+  defaults (one from a direct description of a real screenshot, one from
+  this app's own spacing scale), not pixel-measured or screenshot-verified
+  numbers; a future pass with a real, attached Todoist screenshot or a live
+  session should treat both as open to a real measurement, not settled.
+- The three-tier title/meta-line/section-header hierarchy described for
+  item 7 is a real, identified gap, not solved this pass; needs its own
+  scoped spec (which count, which views, click behavior) before building
+  it, not a half-built guess.
+
 ## 2026-07-14: gradeStructureTrace's emulator-only FieldValue crash, fixed: every admin.firestore.FieldValue call site in functions/index.js now uses the modular import
 
 Follow-up to the async-Structure pass below, which flagged but did not fix a

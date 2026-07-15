@@ -3,7 +3,7 @@ import { useData } from '../AppData.jsx';
 import TaskList from '../components/TaskList.jsx';
 import Board from '../components/Board.jsx';
 import { buildChildrenMap } from '../components/TaskRow.jsx';
-import { IconPlus, IconCaret, IconInbox } from '../components/Icons.jsx';
+import { IconPlus, IconCaret } from '../components/Icons.jsx';
 import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import LayoutControl from '../components/LayoutControl.jsx';
 import InlineTaskAdd from '../components/InlineTaskAdd.jsx';
@@ -210,9 +210,7 @@ export default function ProjectView({ view }) {
   return (
     <div className="content-inner" style={layout === 'board' ? { maxWidth: 'none', paddingRight: 24 } : undefined}>
       <div className="view-header">
-        {project.isInbox ? (
-          <IconInbox className="icon" width={20} height={20} style={{ color: 'var(--ds-ink-soft)' }} />
-        ) : (
+        {project.isInbox ? null : (
           <span className="project-dot" style={{ background: colorHex(project.color), width: 12, height: 12 }} />
         )}
         <h1 className="view-title">{project.name}</h1>

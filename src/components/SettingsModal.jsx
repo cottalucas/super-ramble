@@ -20,10 +20,9 @@ const SECTIONS = [
 // chrome around it, changed. See docs/roadmap.md (Phase 2.7, phase 3 part
 // 8, phase 2.8 part 2) and docs/resolution-log.md, 2026-07-10.
 export default function SettingsModal({ onClose }) {
-  const { user, isLocal, signOut } = useAuth();
+  const { user, isLocal } = useAuth();
   const { todoistConnected, refreshTodoistStatus } = useData();
   const [activeSection, setActiveSection] = useState('account');
-  const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [theme, setThemeState] = useState(getTheme());
   const [todoistBusy, setTodoistBusy] = useState(false);
@@ -32,12 +31,6 @@ export default function SettingsModal({ onClose }) {
   function chooseTheme(next) {
     setTheme(next);
     setThemeState(next);
-  }
-
-  async function doSignOut() {
-    setConfirmSignOut(false);
-    onClose();
-    await signOut();
   }
 
   async function doDisconnectTodoist() {
@@ -81,19 +74,12 @@ export default function SettingsModal({ onClose }) {
               <>
                 <div className="settings-row">
                   <span className="settings-label">Name</span>
-                  <span>{user.displayName || 'Not set'}</span>
+                  <span className="settings-value">{user.displayName || 'Not set'}</span>
                 </div>
                 <div className="settings-row">
                   <span className="settings-label">Email</span>
-                  <span>{user.email}</span>
+                  <span className="settings-value">{user.email}</span>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-quiet settings-signout"
-                  onClick={() => setConfirmSignOut(true)}
-                >
-                  Sign out
-                </button>
               </>
             )}
           </section>
@@ -102,21 +88,24 @@ export default function SettingsModal({ onClose }) {
           {activeSection === 'theme' ? (
           <section className="settings-section">
             <h3 className="settings-heading">Theme</h3>
-            <div className="settings-theme-toggle">
-              <button
-                type="button"
-                className={`chip ${theme === 'light' ? 'active' : ''}`}
-                onClick={() => chooseTheme('light')}
-              >
-                Light
-              </button>
-              <button
-                type="button"
-                className={`chip ${theme === 'dark' ? 'active' : ''}`}
-                onClick={() => chooseTheme('dark')}
-              >
-                Dark
-              </button>
+            <div className="settings-row">
+              <span className="settings-label">Appearance</span>
+              <div className="settings-theme-toggle">
+                <button
+                  type="button"
+                  className={`chip ${theme === 'light' ? 'active' : ''}`}
+                  onClick={() => chooseTheme('light')}
+                >
+                  Light
+                </button>
+                <button
+                  type="button"
+                  className={`chip ${theme === 'dark' ? 'active' : ''}`}
+                  onClick={() => chooseTheme('dark')}
+                >
+                  Dark
+                </button>
+              </div>
             </div>
           </section>
           ) : null}
@@ -126,36 +115,33 @@ export default function SettingsModal({ onClose }) {
             <h3 className="settings-heading">Todoist</h3>
             {isLocal ? (
               <p className="settings-note">Local preview. Todoist connect needs a real signed-in account.</p>
-            ) : todoistConnected ? (
-              <>
-                <p className="settings-note">
-                  Connected. This does not sync. When you confirm a new project in Super Ramble, you can also push it
-                  once into your real Todoist account, on a toggle you choose each time.
-                </p>
-                <button
-                  type="button"
-                  className="btn btn-quiet settings-signout"
-                  disabled={todoistBusy}
-                  onClick={() => setConfirmDisconnect(true)}
-                >
-                  Disconnect
-                </button>
-              </>
             ) : (
               <>
+                <div className="settings-row settings-row-inline">
+                  <div>
+                    <span className="settings-label">Status</span>
+                    <span className="settings-value">{todoistConnected ? 'Connected' : 'Not connected'}</span>
+                  </div>
+                  {todoistConnected ? (
+                    <button
+                      type="button"
+                      className="btn btn-quiet"
+                      disabled={todoistBusy}
+                      onClick={() => setConfirmDisconnect(true)}
+                    >
+                      Disconnect
+                    </button>
+                  ) : (
+                    <button type="button" className="btn btn-quiet" disabled={todoistBusy} onClick={beginTodoistConnect}>
+                      Connect Todoist
+                    </button>
+                  )}
+                </div>
                 <p className="settings-note">
-                  Connect your real Todoist account. This does not sync anything automatically: when you confirm a
-                  new project in Super Ramble, you get the option to also push it once into Todoist, on your
-                  explicit choice each time.
+                  {todoistConnected
+                    ? 'This does not sync. When you confirm a new project in Super Ramble, you can also push it once into your real Todoist account, on a toggle you choose each time.'
+                    : 'Connect your real Todoist account. This does not sync anything automatically: when you confirm a new project in Super Ramble, you get the option to also push it once into Todoist, on your explicit choice each time.'}
                 </p>
-                <button
-                  type="button"
-                  className="btn btn-quiet settings-signout"
-                  disabled={todoistBusy}
-                  onClick={beginTodoistConnect}
-                >
-                  Connect Todoist
-                </button>
               </>
             )}
             {todoistError ? <p className="settings-note settings-error">{todoistError}</p> : null}
@@ -172,16 +158,6 @@ export default function SettingsModal({ onClose }) {
           </div>
         </div>
       </div>
-
-      {confirmSignOut ? (
-        <ConfirmDialog
-          title="Sign out?"
-          message="Signing out doesn't delete anything. Sign in again anytime to see your tasks."
-          confirmLabel="Sign out"
-          onConfirm={doSignOut}
-          onCancel={() => setConfirmSignOut(false)}
-        />
-      ) : null}
 
       {confirmDisconnect ? (
         <ConfirmDialog

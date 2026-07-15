@@ -36,8 +36,10 @@ export default function TaskDetail({ taskId, onClose }) {
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [commentsCollapsed, setCommentsCollapsed] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const contentTimer = useRef(null);
   const descTimer = useRef(null);
+  const savedTimer = useRef(null);
   const contentRef = useRef(null);
   const descRef = useRef(null);
   const commentRef = useRef(null);
@@ -78,16 +80,31 @@ export default function TaskDetail({ taskId, onClose }) {
     await bump();
   }
 
+  // A quiet confirmation, not a notification: only the debounced
+  // content/description saves flash it, not every immediate rail-field save
+  // (Date, Priority, Labels, Project) saveField also handles.
+  function flashSaved() {
+    setJustSaved(true);
+    clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setJustSaved(false), 1500);
+  }
+
   function onContentChange(v) {
     setContent(v);
     clearTimeout(contentTimer.current);
-    contentTimer.current = setTimeout(() => saveField({ content: v }), SAVE_DEBOUNCE_MS);
+    contentTimer.current = setTimeout(async () => {
+      await saveField({ content: v });
+      flashSaved();
+    }, SAVE_DEBOUNCE_MS);
   }
 
   function onDescriptionChange(v) {
     setDescription(v);
     clearTimeout(descTimer.current);
-    descTimer.current = setTimeout(() => saveField({ description: v }), SAVE_DEBOUNCE_MS);
+    descTimer.current = setTimeout(async () => {
+      await saveField({ description: v });
+      flashSaved();
+    }, SAVE_DEBOUNCE_MS);
   }
 
   async function addSubtask() {
@@ -188,6 +205,7 @@ export default function TaskDetail({ taskId, onClose }) {
               value={description}
               onChange={(e) => onDescriptionChange(e.target.value)}
             />
+            {justSaved ? <span className="detail-saved">Saved</span> : null}
 
             {subtasks.length ? <TaskList roots={subtasks} childrenOf={childrenOf} /> : null}
 
