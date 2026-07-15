@@ -67,6 +67,129 @@ unhandled error had surfaced, with no `TypeError` anywhere in the run.
   untouched; they are not Cloud Functions and do not run inside a trigger's
   cold start.
 
+## 2026-07-14: Live verification of the async-Structure pass. The complex-transcript 502 is closed for real; a hosting-deploy gotcha found and fixed along the way
+
+Follow-up to the entry directly below (async Structure, real timing data,
+the emulator test). Deployed and live-verified against the real deployed
+site, per this task's own explicit instruction not to trust a clean build
+and a passing local test alone.
+
+**Deployed:** `firebase deploy --only functions,firestore:rules,hosting`.
+Functions (`api`, `processStructureTrace` new, `gradeStructureTrace`) and
+Firestore rules released cleanly. The overall command then exited with a
+non-zero error: "Functions successfully deployed but could not set up
+cleanup policy in locations us-central1, europe-west1" (no cleanup policy
+existed yet for Artifact Registry container images in either region).
+Resolved directly with `firebase functions:artifacts:setpolicy` for both
+regions (`processStructureTrace`'s Firestore trigger deploys to
+`europe-west1`, matching the existing `gradeStructureTrace`'s region, since
+a Firestore trigger runs in its database's own location, not
+`us-central1` where the HTTP `api` function lives; `api`'s own region is
+independently configurable, this one is not).
+
+**A real gotcha, found by verifying rather than trusting the deploy
+command's exit code.** That same error aborted the overall `firebase
+deploy` invocation *before* Hosting's own deploy sequence reached its
+finalize/release step: `hosting: file upload complete` had printed, but
+never `hosting: releasing new version` / `release complete` / `Deploy
+complete!`. The new client bundle was uploaded to Firebase's staging area
+but never actually released to the live site. `https://super-ramble.web.app`
+kept serving the prior deployed bundle (`index-Yu1caoV7.js`, confirmed via
+direct `curl` against the live URL, not assumed from the local `dist/`
+build) even after the functions/rules half of the same deploy command had
+fully succeeded. The first live test run against the site (below) was
+run against this stale bundle, and its result was consequently not
+diagnostic of the new code at all: the old, synchronous `callModel` treated
+the new server's fast `{ traceId }` enqueue response as if `body.structured`
+were the final answer, got `undefined`, failed client-side contract
+validation immediately ("response must be an object"), retried once (also
+immediately), and threw the generic `ContractError` message a few seconds
+after submit, not the ~90s+ wait the new code should show. Both of *those*
+enqueued trace documents did still get processed for real by
+`processStructureTrace` in the background (each ran a real, correctly-
+handled `max_tokens` truncation, confirmed directly against Firestore and
+Cloud Logging), so the server-side half of this pass was never in doubt;
+only the client half wasn't actually live yet. Re-ran `firebase deploy
+--only hosting` on its own (the cleanup policy was already fixed by then,
+so this run completed its full finalize/release sequence); `curl`ing the
+live URL directly afterward confirmed the correct new bundle
+(`index-D7IqMUXY.js`) was being served.
+
+### Decisions not to relitigate
+
+- A `firebase deploy` invocation exiting non-zero does not mean every
+  target it covered failed, and exiting zero for the targets that did
+  report success does not mean every target's deploy sequence actually
+  reached its own finalize step. Hosting's deploy is two phases (upload,
+  then finalize/release); an error raised by a *different* target
+  (Functions' artifact cleanup policy here) after Hosting's upload phase
+  printed success can still abort the overall command before Hosting's own
+  release phase runs. Confirm what is actually live by querying the real
+  deployed asset directly (`curl` the live URL for the referenced bundle
+  hash, compared against the local `dist/` build), not by reading the
+  deploy command's own log for the phrase "complete" on the target you
+  care about in isolation.
+- `processStructureTrace` deploys to `europe-west1`, not `us-central1`,
+  matching `gradeStructureTrace`'s existing region: a Firestore-triggered
+  function runs in its Firestore database's own location, which is
+  independent of `exports.api`'s own configurable HTTP-function region.
+  This is expected, not a misconfiguration; both regions need their own
+  Artifact Registry cleanup policy.
+
+**Live verification, once the correct bundle was actually live.** Signed in
+as the real user at `https://super-ramble.web.app` (the user's own session,
+not a fabricated one) and submitted two real transcripts through the
+browser:
+
+1. A three-storyline, nested-sub-task transcript at least as complex as the
+   original bug report (a birthday party with a dependent venue-then-cake-
+   then-invitations chain, a camping trip with nested packing/meal-planning
+   sub-tasks, plus a fourth unrelated task). The new waiting UI showed
+   correctly throughout: "Usually under 82s, can take up to 96s for a
+   complex dump." with a live elapsed-seconds counter ticking up (10s, 41s,
+   ...), a visible Cancel button the whole time. After the real ~90s+ wait,
+   it resolved to the server's own real, explained error: "model response
+   was truncated (max_tokens reached) before it finished" — the existing,
+   already-understood `max_tokens` failure mode (2026-07-07), not a bare,
+   unexplained `502`. **This is the actual fix, confirmed live**: the
+   browser held the connection open through the real ~90s+ duration via
+   Firestore `onSnapshot`, with no Hosting-rewrite cutoff at all, and
+   surfaced the server's real reason for failure instead of a generic
+   infrastructure error page.
+2. A shorter three-item flat-tasks transcript (a passport renewal, a
+   dentist call, dry cleaning), to confirm the happy path too, not only the
+   truncation path. Resolved to a real, correct preview (`decision:
+   "tasks"`, confidence 92%, three tasks, priorities matching the
+   transcript's own urgency language) within the fast end of the estimated
+   range. Discarded rather than confirmed, so nothing was actually written
+   to the real account by this verification.
+
+**Verified:** both live submissions above, driven through the real signed-in
+browser session, not simulated. Cross-referenced the first submission's two
+enqueued-but-stale-bundle trace documents directly against Firestore
+(`status`, `stopReason`, `errorMessage`) and Cloud Logging (`"structure
+phase timings"`, confirming real ~91-93s `modelCall` durations, matching
+Phase 1's own historical range) to understand exactly what the stale-bundle
+run actually did server-side, rather than guessing from the confusing
+client-side symptom alone.
+
+### Decisions not to relitigate (continued)
+
+- The original complex-transcript `502` (all 2026-07-14 entries above) is
+  closed. A real, complex, multi-thread transcript submitted against the
+  live deployed site now either resolves successfully or fails with a real,
+  explained server-side reason (`max_tokens` truncation, a refusal, or
+  invalid JSON), after correctly waiting through the model call's real
+  duration; it does not 502 silently partway through. Re-open only with a
+  new, specific live failure, not this same symptom recurring from the same
+  cause.
+- `max_tokens` truncation on a genuinely rich, multi-thread transcript is a
+  real, separate, already-documented limitation (2026-07-07), not something
+  this pass was scoped to fix. Do not conflate a future truncation report
+  with the connection-cutoff bug this pass closed; they are different
+  failure modes with different fixes (raising `max_tokens` or restructuring
+  the prompt, versus removing the long-lived HTTP request).
+
 ## 2026-07-14: Async Structure, real timing data, and an emulator integration test. The complex-transcript 502 is architecturally closed; live verification is a follow-up entry
 
 Four things, in order: real timing data from production, the async
