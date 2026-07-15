@@ -3,6 +3,70 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-14: gradeStructureTrace's emulator-only FieldValue crash, fixed: every admin.firestore.FieldValue call site in functions/index.js now uses the modular import
+
+Follow-up to the async-Structure pass below, which flagged but did not fix a
+same-class bug in `gradeStructureTrace`'s own `judgedAt` write. Resolved this
+pass, verified against a real emulator run, not just reasoned about.
+
+**Why the original scoping decision needed revisiting.** The async-Structure
+pass fixed `logUsage`'s crash (`admin.firestore.FieldValue` undefined when
+called from inside a Firestore-triggered function's own cold start under the
+local emulator) by switching just that one call site to the modular
+`FieldValue` import, reasoning every other `admin.firestore.FieldValue` call
+site in the file had an established, working production track record and so
+did not need the same treatment. `gradeStructureTrace`, an existing,
+long-running trigger with exactly that production track record, hit the
+identical failure class the same pass's own emulator test run incidentally
+surfaced. Production history describes real Firestore, not the local
+emulator's own module-loading behavior inside a background-triggered
+function's cold start; it was never actually evidence that the namespace
+form is safe there. With two independent trigger-context call sites now
+shown to fail the same way, the "established production track record"
+distinction no longer holds as a reason to leave the rest alone.
+
+**Fix.** Every remaining `admin.firestore.FieldValue.*` call site in
+`functions/index.js` now uses the modular `FieldValue` import already
+declared at the top of the file: `createProcessingTrace`'s `createdAt`, the
+`/structure/outcome` endpoint's `outcomeAt`, `logPipelineLearning`'s `date`,
+`gradeStructureTrace`'s own `judgedAt`, and the auto-promotion write's
+`addedAt` on `referenceExamples`. `logUsage` is unchanged, already on the
+modular form. Left `scripts/*.mjs` alone (`grade-traces.mjs`,
+`seed-reference-examples.mjs`, `review-queue.mjs`,
+`structure-emulator-test.mjs` itself): those run as plain Admin SDK Node
+scripts, never inside a Cloud Functions trigger's own runtime, so the
+mechanism behind this bug does not apply to them.
+
+**Verified, not assumed.** `functions/node_modules` was missing in this
+worktree (a fresh checkout); installed it first. The local Java runtime
+`scripts/structure-emulator-test.mjs` needs was present via Homebrew
+(`openjdk`) but not linked onto `PATH`; ran with
+`PATH="/opt/homebrew/opt/openjdk/bin:$PATH"` rather than linking it globally,
+since linking a system Java is outside this task's scope.
+`EMULATOR_ALLOW_LIVE=true npm run test:structure-emulator` (real
+`gcloud auth application-default login` credentials already present,
+no `functions/.secret.local` needed) passed both checks clean. Test 2's
+outcome-race scenario is what actually exercises `gradeStructureTrace`'s
+write path (its guard needs `outcome !== "pending"`, which only Test 2
+produces before the trace resolves): `gradeStructureTrace` ran to completion
+several times across both tests, including once during the emulator's own
+shutdown drain, the exact point the previous pass's flagged finding said the
+unhandled error had surfaced, with no `TypeError` anywhere in the run.
+`node --check functions/index.js` also confirmed clean syntax.
+
+### Decisions not to relitigate
+
+- Every `admin.firestore.FieldValue` call site in `functions/index.js` uses
+  the modular `FieldValue` import now; there is no longer a mixed
+  namespace-vs-modular split in this file to reason about case by case.
+- The "established production track record" heuristic from the prior pass is
+  retired as a reason to treat call sites differently: it distinguishes real
+  Firestore from the emulator, not trigger-context safety, and the emulator
+  is exactly what this class of bug only ever showed up in.
+- `scripts/*.mjs`'s own `admin.firestore.FieldValue` usages are intentionally
+  untouched; they are not Cloud Functions and do not run inside a trigger's
+  cold start.
+
 ## 2026-07-14: Live verification of the async-Structure pass. The complex-transcript 502 is closed for real; a hosting-deploy gotcha found and fixed along the way
 
 Follow-up to the entry directly below (async Structure, real timing data,

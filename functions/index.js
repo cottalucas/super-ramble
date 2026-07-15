@@ -405,20 +405,22 @@ async function checkAndReserveLimit(uid) {
 // /transcribe: one daily ceiling (checkAndReserveLimit) across both, not a
 // second parallel limit system.
 //
-// Uses the modular FieldValue import (top of file), not the
-// admin.firestore.FieldValue namespace property every other call site in
-// this file still uses: the async-Structure pass (docs/resolution-log.md)
-// is what first calls this function from inside a background-triggered
-// function's own cold start (processStructureTrace), not only from an
-// HTTP handler the way every prior caller did, and real emulator testing
-// against that new invocation path found admin.firestore.FieldValue
-// intermittently undefined there specifically (a real, reproduced failure,
-// not a guess), while the modular import did not reproduce it. Scoped to
-// just this one function, not a repo-wide swap of every other
-// admin.firestore.FieldValue call site: those still only ever run from
-// contexts with an established, working production track record (the HTTP
-// handler, or gradeStructureTrace's own long-existing onDocumentWritten
-// trigger), unlike this one.
+// Uses the modular FieldValue import (top of file). The async-Structure pass
+// (docs/resolution-log.md, 2026-07-14) found real emulator testing throws
+// "Cannot read properties of undefined" off the admin.firestore.FieldValue
+// namespace property when called from inside a background-triggered
+// function's own cold start (processStructureTrace's call to this function);
+// the modular import did not reproduce it. That pass scoped the fix to just
+// this one call site, reasoning every other admin.firestore.FieldValue call
+// site had an established, working production track record. The same
+// emulator test run then independently found the identical failure class in
+// gradeStructureTrace's own judgedAt write, an existing, long-running
+// trigger with exactly that production track record, which showed the
+// namespace form is not actually safe from any background-triggered
+// context under the local emulator, production history notwithstanding.
+// Every admin.firestore.FieldValue call site in this file now uses this
+// same modular import for that reason, verified against a real emulator run
+// (docs/resolution-log.md).
 async function logUsage(ref, { costUsd = 0, inputTokens = 0, outputTokens = 0, audioSeconds = 0 }) {
   await ref.set(
     {
@@ -463,7 +465,7 @@ async function createProcessingTrace(uid, { transcript, existingProjectIds, prio
       existingProjectIds,
       priorErrors: priorErrors || null,
       status: 'processing',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
       outcome: 'pending',
       outcomeAt: null
     });
@@ -732,7 +734,7 @@ exports.api = onRequest(
           res.status(400).json({ error: 'edits does not match the expected shape' });
           return;
         }
-        const update = { outcome, outcomeAt: admin.firestore.FieldValue.serverTimestamp() };
+        const update = { outcome, outcomeAt: FieldValue.serverTimestamp() };
         // Only ever written for confirmed_with_edits: a plain confirm or
         // cancel stays exactly the two-field update it always was, even if
         // a future client bug sent edits alongside one of those.
@@ -1386,7 +1388,7 @@ function summarize(verdict) {
 // addition, not scope creep.
 async function logPipelineLearning({ kind, uid, traceId, summary }) {
   await db.collection('pipelineLearningLog').add({
-    date: admin.firestore.FieldValue.serverTimestamp(),
+    date: FieldValue.serverTimestamp(),
     kind,
     uid,
     traceId,
@@ -1431,7 +1433,7 @@ exports.gradeStructureTrace = onDocumentWritten(
         judgeCompleteness: verdict.completeness,
         judgeCorrectness: verdict.correctness,
         judgeNotes,
-        judgedAt: admin.firestore.FieldValue.serverTimestamp()
+        judgedAt: FieldValue.serverTimestamp()
       },
       { merge: true }
     );
@@ -1493,7 +1495,7 @@ exports.gradeStructureTrace = onDocumentWritten(
         transcript: afterData.transcript,
         response: tree,
         source: 'auto-promoted',
-        addedAt: admin.firestore.FieldValue.serverTimestamp(),
+        addedAt: FieldValue.serverTimestamp(),
         promotedFromTraceId: traceId,
         notes: judgeNotes
       });
