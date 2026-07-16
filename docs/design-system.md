@@ -415,12 +415,10 @@ ago>" line, add two real rows, each a plain menu-item button
 (`.avatar-menu-item`, matching `.settings-nav-item`'s quiet, full-width,
 left-aligned button styling rather than inventing a new one):
 
-- **Settings**, calling the same `setSettingsOpen(true)` the sidebar's gear
-  icon already calls. Additive, not a replacement: the gear icon stays
-  exactly where it is. Dark mode itself is not a separate row here; it stays
-  reachable exactly where it already lives, `SettingsModal.jsx`'s Theme
-  section, one click further in through this new Settings row (or the gear
-  icon, unchanged).
+- **Settings**, calling `setSettingsOpen(true)`. Dark mode itself is not a
+  separate row here; it stays reachable exactly where it already lives,
+  `SettingsModal.jsx`'s Theme section, one click further in through this
+  Settings row.
 - **Log out**, real (non-local) accounts only, gated on the same `isLocal`
   check every other local-preview-only control in this app already uses.
   Opens the same confirm-before-sign-out flow, "Signing out doesn't delete
@@ -440,6 +438,19 @@ sign-out control is a common enough pattern elsewhere that it looked
 intentional rather than leftover, but this app already had the real one
 here. Do not re-add a Sign out control to `SettingsModal.jsx`'s Account
 section; this avatar-menu row is where it lives.
+
+**Reopened 2026-07-16, reported against a real Todoist screenshot: the name
+row carries a small down-caret, and there is no separate gear icon at all.**
+`sidebar-head-trigger` gains `IconCaret` (`.sidebar-head-caret`, `width={14}
+height={14}`, tinted `--ds-ink-soft`) right after the name, static, no
+rotate transform: a visual affordance marking that the row opens a menu, not
+a control of its own. `onClick` stays on the outer button, unchanged.
+
+`Sidebar.jsx`'s separate gear icon button next to this trigger is gone.
+**The avatar-menu Settings row above is now the only Settings entry point in
+the app**, the same pattern this section already established for Log out.
+Do not re-add a second Settings control (a gear icon or otherwise) outside
+this menu.
 
 ## Settings modal
 

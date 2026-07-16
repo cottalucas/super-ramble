@@ -316,6 +316,13 @@ textarea {
   color: var(--ds-ink);
 }
 
+/* Static, no rotate transform: marks that this row opens a menu, does not
+   control anything itself. onClick stays on .sidebar-head-trigger. */
+.sidebar-head-caret {
+  flex: 0 0 auto;
+  color: var(--ds-ink-soft);
+}
+
 .avatar-menu-header {
   padding: 8px 10px 6px;
   font-size: 13px;
