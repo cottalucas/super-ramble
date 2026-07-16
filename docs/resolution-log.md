@@ -3,6 +3,143 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-16: Sidebar avatar-menu trigger, three refinements; Super Ramble loading bar and a "suggested" label on the project name; a real toggle bug found and fixed along the way
+
+Five items, one branch: items 1-3 are a direct refinement of the same day's
+earlier "Sidebar header caret added, the separate gear icon removed" entry,
+not a new feature; items 4-5 are the two Super Ramble pieces already decided
+separately. `docs/orchestration.md` and the full `docs/` set read fresh
+first, as instructed.
+
+**Item 1: caret next to the name, not the far right edge.** The name span's
+inline `flex: 1` (`Sidebar.jsx`'s `sidebar-head-trigger`) absorbed the
+button's whole width, pushing `IconCaret` to the far right of the sidebar
+column instead of sitting next to "You"/the display name. Removed the
+inline style; the button itself keeps `width: 100%` so the whole row stays
+clickable, only the internal grouping changed. Verified live: avatar, name,
+and caret now sit tight together on the left, empty space after them.
+
+**Item 2: a persistent "open" highlight, and a real bug found verifying
+it.** Added `sidebar-head-trigger-open` (conditional on `avatarMenuOpen`),
+reusing `.icon-btn:hover`'s exact tint
+(`color-mix(in srgb, var(--ds-ink) 6%, transparent)`) and
+`.avatar-menu-item`'s own `border-radius: var(--radius)` convention, not new
+values. Verified live in both themes: computed style confirmed the exact
+background and radius while the menu is open.
+
+Instructed to verify the toggle-and-outside-close pattern live rather than
+assume a CSS-only change is safe, given this component's real 2026-07-10
+bubbling bug. Did that, and found a second, different bug, pre-existing,
+not caused by this pass (confirmed: neither `Popover.jsx` nor this button's
+`onClick` had been touched since the initial commit before today). Root
+cause: `Popover.jsx`'s outside-click detector listens for `mousedown` on
+`document` and closes unless the click lands inside `.popover` or inside
+its own internal anchor marker, a zero-size `<span>` it renders at its own
+JSX position. In `Sidebar.jsx` (and every other `popover-wrap` trigger in
+this app), that marker is a sibling of the trigger button, not the button
+itself, so a click on the trigger is never "on the anchor" as far as
+`Popover.jsx` can tell. Sequence on a second click while open: `mousedown`
+bubbles to `document` first, `Popover.jsx` sees "not on anchor, not inside
+popover," calls `onClose()`, `setAvatarMenuOpen(false)` is scheduled; then
+`click` fires and reaches the button's own `onClick`, which was a plain
+toggle (`v => !v`) and flipped the state straight back to `true`. Net
+effect: clicking the trigger a second time never closed the menu, it
+silently reopened it every time. Confirmed with a full synthetic
+`mousedown`/`mouseup`/`click` sequence (a bare `.click()` call only fires
+`click`, not `mousedown`, and does not reproduce this: caught that gap in
+the test itself before trusting a false negative).
+
+**Fixed, scoped to this trigger only, not `Popover.jsx`'s shared contract.**
+`onClick` no longer toggles; it only ever opens
+(`if (!avatarMenuOpen) setAvatarMenuOpen(true)`), reading the render
+closure's `avatarMenuOpen` (still `true` at the moment this same click's
+`mousedown` has already scheduled the close, since a closure does not
+re-read state mid-flight). Closing is now entirely `Popover.jsx`'s own job,
+from any cause: outside click, Escape, or the trigger clicked again. A
+broader fix to `Popover.jsx` itself (passing the real trigger element in as
+part of its anchor check) would likely help every other `popover-wrap`
+trigger in this app the same way, since the shape is identical everywhere
+(`TaskRow.jsx`'s "..." menu, `SectionOptionsMenu.jsx`, etc.), but that is a
+shared-component contract change affecting every consumer, out of scope for
+a pass about one trigger; flagged here for a future pass, not fixed blind.
+Verified live after the fix, both themes, with real
+`mousedown`/`mouseup`/`click` sequences: open from closed, click the
+trigger again while open (closes, the exact repro), an outside click
+(closes), and clicking Settings (closes the menu and opens `SettingsModal`,
+confirming no regression on the 2026-07-10 fix this component already
+carries).
+
+**Item 3: Settings row gets its icon back.** `IconSettings` (unused in
+`Sidebar.jsx` since the standalone gear button was removed the same day,
+still exported from `Icons.jsx` for exactly this kind of reuse) is
+re-imported and rendered inside the avatar-menu's Settings button, 16x16,
+`className="icon"`, matching `ProjectPicker.jsx`'s own icon-plus-label
+popover-item convention rather than inventing new spacing.
+`.avatar-menu-item` gained `gap: 10px`, the same value `.popover-item`
+already uses for the same layout. The standalone gear button stays removed;
+this is only the icon inside the existing row. Verified live, both themes.
+
+**Item 4: Super Ramble loading, a progress bar and a copy fix.** A thin
+`.sr-loading-bar`/`.sr-loading-bar-fill` track under `.sr-loading`, only
+while `waitingTraceId` is set, width a percentage of
+`waitingElapsedSec / STRUCTURE_P90_SECONDS` capped at 100% (a real call can
+run past the p90 estimate), `--ds-red` fill, the same token every other
+active/in-progress indicator in this app already uses. This environment has
+no reachable `/api/structure` backend (a plain dev server, no Functions
+emulator; a real submit fails fast with a 404 before `waitingTraceId` is
+ever set, so the state the bar depends on is never reached that way).
+Verified the CSS and copy directly instead: injected the exact markup and
+class names into the live page at a few widths, both themes, confirmed the
+fill renders and scales correctly and the track/fill colors resolve to the
+right tokens; verified the percentage/cap math and the constants
+(`STRUCTURE_P50_SECONDS`/`STRUCTURE_P90_SECONDS`) by reading the code, not
+just the rendered snapshot, since the real timer path could not be driven
+live this pass. Copy fixed: "for a complex dump" (a bare noun already
+flagged as the wrong direction, `docs/roadmap.md`, when the model's own
+`reasoning` field was rewritten to stop using it) is now "Usually under
+82s. Longer or more tangled brain-dumps can take up to 96s.", this app's
+own kept-hyphen compound (`docs/design-system.md`'s stop-slop rules). The
+two second-count interpolations are unchanged.
+
+**Item 5: project name labeled as a suggestion.** A small caption,
+"Suggested project name," directly above `sr-project-name-input`
+(`.sr-project-name-label`, the same two properties as `.settings-label`,
+`docs/design-system.md`'s "Settings modal" section, not a new type scale or
+color), shown only when `isNewProject`. Same verification constraint and
+method as item 4 (no reachable backend to produce a real preview; verified
+via injected markup in both themes instead, and the conditional logic by
+reading the code).
+
+**Standard loop.** `npm run build` clean. `npm run eval` green: 18/18
+offline Structure, 19/19 date, 26/26 Todoist, 16/16 write,
+`check:prompt-sync` passed. `node scripts/check-secrets.mjs` passed. No
+`src/pipeline/` or `functions/` file touched. `VITE_ENABLE_LOCAL_PREVIEW`
+toggled to `true` temporarily for the local dev server only (no real
+Firebase Auth session or Claude in Chrome connection available this pass,
+the same constraint and the same sanctioned pattern the caret/gear-icon
+pass used the same day), reverted to `false` before the final build,
+`git diff .env.local` confirmed clean and `npm run verify:prod-env`
+confirmed safe after reverting.
+
+### Decisions not to relitigate
+
+- The avatar-menu trigger's `onClick` only ever opens; closing is entirely
+  `Popover.jsx`'s own outside-click/Escape handling. Do not change it back
+  to a plain toggle, that is the exact bug this entry fixes.
+- `Popover.jsx`'s outside-click anchor does not track the real trigger
+  element, only its own internal marker span rendered at the trigger's
+  sibling position. This affects every `popover-wrap`-style trigger in this
+  app identically (confirmed the shape is the same in `TaskRow.jsx` and
+  `SectionOptionsMenu.jsx`, not verified live in this pass since it was out
+  of scope), not just the sidebar's. A future pass fixing it properly
+  should change `Popover.jsx`'s own contract (take the trigger ref in), not
+  patch each consumer's `onClick` the way this entry did for one trigger.
+- `.sr-loading-bar`'s fill math and `.sr-project-name-label`'s styling were
+  verified by injecting the real markup/classes into the live page and by
+  reading the code, not by driving the real `/api/structure` flow: this
+  environment has no reachable backend for it. A future pass with a real
+  session or emulator should confirm the live timer-driven path directly.
+
 ## 2026-07-16: Five scoped pieces closing gaps found against Todoist's own "Text Scan" AI feature: a real date parser, a fully editable preview, a task-count/transcript summary, and a thumbs up/down signal
 
 One branch, five parts, discussed directly with Lucas (the PO), each aimed

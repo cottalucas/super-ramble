@@ -703,8 +703,15 @@ export default function SuperRambleModal({ onClose }) {
               <p className="sr-loading">Turning what you said into tasks.</p>
               {waitingTraceId ? (
                 <>
+                  <div className="sr-loading-bar">
+                    <div
+                      className="sr-loading-bar-fill"
+                      style={{ width: `${Math.min(100, (waitingElapsedSec / STRUCTURE_P90_SECONDS) * 100)}%` }}
+                    />
+                  </div>
                   <p className="sr-loading-estimate">
-                    Usually under {STRUCTURE_P50_SECONDS}s, can take up to {STRUCTURE_P90_SECONDS}s for a complex dump.
+                    Usually under {STRUCTURE_P50_SECONDS}s. Longer or more tangled brain-dumps can take up to{' '}
+                    {STRUCTURE_P90_SECONDS}s.
                   </p>
                   <p className="sr-loading-elapsed">{waitingElapsedSec}s elapsed</p>
                 </>
@@ -809,13 +816,16 @@ export default function SuperRambleModal({ onClose }) {
                       </div>
                     </div>
                     {isNewProject ? (
-                      <input
-                        type="text"
-                        className="sr-project-name-input"
-                        aria-label="Project name"
-                        value={edited.project.name}
-                        onChange={(e) => editProjectName(e.target.value)}
-                      />
+                      <>
+                        <span className="sr-project-name-label">Suggested project name</span>
+                        <input
+                          type="text"
+                          className="sr-project-name-input"
+                          aria-label="Project name"
+                          value={edited.project.name}
+                          onChange={(e) => editProjectName(e.target.value)}
+                        />
+                      </>
                     ) : null}
                     <TreePreview
                       editedStructured={edited}

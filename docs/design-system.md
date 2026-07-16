@@ -498,6 +498,38 @@ the app**, the same pattern this section already established for Log out.
 Do not re-add a second Settings control (a gear icon or otherwise) outside
 this menu.
 
+**Refined the same day, three pieces, reported against the same real
+screenshot.** The name span's inline `flex: 1` absorbed the trigger's whole
+width and pushed the new caret to the far right edge of the sidebar column
+instead of sitting next to the name; removed, the button itself keeps
+`width: 100%` so the row stays fully clickable. The trigger also gains a
+persistent `sidebar-head-trigger-open` tint while its own `Popover` is
+showing (reusing `.icon-btn:hover`'s exact `color-mix` value and
+`.avatar-menu-item`'s `border-radius: var(--radius)`, not new values), so it
+reads as "pressed open," not just hoverable. The Settings row gets
+`IconSettings` back (16x16, matching `ProjectPicker.jsx`'s own
+icon-plus-label popover-item convention), the same icon the standalone gear
+button used before it was removed above; that removal still stands, this is
+only the icon inside the existing row.
+
+**A real, pre-existing toggle bug was found and fixed verifying the above,
+not caused by it.** `Sidebar.jsx`'s trigger `onClick` no longer toggles
+(`v => !v`); it only ever opens
+(`if (!avatarMenuOpen) setAvatarMenuOpen(true)`). `Popover.jsx`'s own
+outside-click handling is now solely responsible for closing, from any
+cause. Root cause and full verification in `docs/resolution-log.md`,
+2026-07-16 (the sidebar avatar-menu refinements entry): `Popover.jsx`'s
+outside-click check does not recognize the real trigger element, only its
+own internal zero-size anchor marker rendered at a sibling position, so a
+plain toggle here fought against `Popover.jsx`'s own mousedown-based close,
+and a second click on the trigger never actually closed the menu. This
+likely affects every other `popover-wrap`-style trigger in this app the
+same way (`TaskRow.jsx`'s "..." menu, `SectionOptionsMenu.jsx`, and others
+share the identical shape), not verified live since it was out of scope
+this pass; a future pass fixing it at the root should change
+`Popover.jsx`'s own anchor contract, not patch each trigger's `onClick`
+individually the way this entry did for one trigger.
+
 ## Settings modal
 
 `SettingsModal.jsx`'s two-pane chrome (left category nav, right detail pane)

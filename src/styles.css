@@ -323,6 +323,14 @@ textarea {
   color: var(--ds-ink-soft);
 }
 
+/* "Pressed open" state while its own Popover is showing, not just :hover:
+   reuses .icon-btn:hover's exact tint (styles.css) rather than a new value,
+   and .avatar-menu-item's own border-radius convention. */
+.sidebar-head-trigger-open {
+  background: color-mix(in srgb, var(--ds-ink) 6%, transparent);
+  border-radius: var(--radius);
+}
+
 .avatar-menu-header {
   padding: 8px 10px 6px;
   font-size: 13px;
@@ -347,6 +355,7 @@ textarea {
 .avatar-menu-item {
   display: flex;
   align-items: center;
+  gap: 10px;
   width: 100%;
   border: 0;
   background: transparent;
@@ -1656,6 +1665,27 @@ textarea:focus {
   animation: sr-tip-fade 3400ms ease-in-out;
 }
 
+/* Fill width is a plain inline style (percentage of elapsed/p90, capped at
+   100%), not a CSS variable: the value changes every second from a plain
+   JS timer, no animation library involved. --ds-red, the same token every
+   other active/in-progress indicator in this app already uses (Add task,
+   active nav, the recording ring). */
+.sr-loading-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ds-line);
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+.sr-loading-bar-fill {
+  height: 100%;
+  background: var(--ds-red);
+  border-radius: 2px;
+  transition: width 400ms linear;
+}
+
 .sr-loading-estimate {
   color: var(--ds-ink-soft);
   font-size: 12px;
@@ -1741,6 +1771,15 @@ textarea:focus {
   color: var(--ds-ink);
   font-weight: 600;
   margin-top: 10px;
+}
+
+/* Same two properties as .settings-label (styles.css), not a new type
+   scale or color: marks the real, editable input right below it as a
+   suggestion rather than a plain heading. */
+.sr-project-name-label {
+  display: block;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
 }
 
 .sr-project-name-input {
