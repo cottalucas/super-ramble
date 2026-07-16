@@ -7,6 +7,7 @@ import { structureTranscript, ContractError } from '../pipeline/structure.js';
 import { toProjectTree, flattenTasks, toDue, updateTaskAtRef } from '../pipeline/write.js';
 import { getAuthToken } from '../lib/authToken.js';
 import { createTodoistClient } from '../todoist/index.js';
+import { colorHex } from '../lib/colors.js';
 import TaskRow, { buildChildrenMap } from './TaskRow.jsx';
 import VoiceRecorder from './VoiceRecorder.jsx';
 import { IconThumbsUp, IconThumbsDown } from './Icons.jsx';
@@ -21,14 +22,26 @@ import { IconThumbsUp, IconThumbsDown } from './Icons.jsx';
 // writing anything back, docs/architecture.md's structureTraces field list).
 const STRUCTURE_WAIT_TIMEOUT_MS = 240_000;
 
-// Real percentiles from scripts/structure-timing-stats.mjs, run against
-// actual Cloud Logging history (docs/resolution-log.md's async-Structure
-// entry): p50 and p90 of totalMs across the 8 real calls logged so far.
-// Deliberately not rounded to a "nicer" number: these are the tool's real
-// output. Only 8 data points exist at the time this was written; re-run the
-// script and update these as real usage accumulates (docs/roadmap.md's
-// "Next" section already flags this).
-const STRUCTURE_P50_SECONDS = 82;
+// Re-run against real Cloud Logging history, 2026-07-17 (see
+// docs/resolution-log.md this same date): still only 8 real calls total, all
+// of them the identical test transcript from one 2026-07-14 debugging
+// session (the Hosting-cutoff/timeout diagnostic work, docs/architecture.md),
+// not diverse organic usage. That sample is sharply bimodal, not a smooth
+// distribution: 2 calls at 9.4s/10.2s (under 1000 output tokens), 6 calls at
+// 71-96s (near the 8192 max_tokens cap). The overall p50 across all 8
+// (81.4s) is dragged almost entirely by the 6 slow, near-max-token calls and
+// would still read exactly as "obviously wrong" against a real fast call as
+// the old 82s guess did. P50 here uses the fast bucket instead (p50=9.4s,
+// p90=10.2s), rounded up to a clean 10s, since that is what "usual" actually
+// means for a call that isn't pushing the model to its output ceiling. P90
+// is left at the real near-max-token/overall p90 (96.2s, rounds to 96,
+// unchanged from before) on purpose: a genuinely complex or tangled dump can
+// still land in that bucket, and the existing copy already frames 96s as the
+// complex-dump ceiling, not the usual case. Re-run
+// `npm run structure:timing-stats` once real, varied (not one repeated test
+// transcript) usage accumulates; docs/roadmap.md's "Next" section already
+// flags this as due for revisiting.
+const STRUCTURE_P50_SECONDS = 10;
 const STRUCTURE_P90_SECONDS = 96;
 
 // TaskList itself was a poor fit for this preview: it hard-wires useData()
@@ -48,7 +61,16 @@ const STRUCTURE_P90_SECONDS = 96;
 // flattenTasks's own refs (`t{i}`/`t{i}s{j}`), so the caller can hand it
 // straight to `updateTaskAtRef` without this component needing to know
 // anything about that scheme itself.
-function TreePreview({ editedStructured, onRemove, onContentChange, onPriorityChange, onDueChange, onSectionChange }) {
+function TreePreview({
+  editedStructured,
+  onRemove,
+  onContentChange,
+  onPriorityChange,
+  onDueChange,
+  onSectionChange,
+  expandedTaskId,
+  onToggleExpand
+}) {
   const flat = flattenTasks(editedStructured);
   const rows = flat.map((t, i) => ({
     id: t.ref,
@@ -103,6 +125,8 @@ function TreePreview({ editedStructured, onRemove, onContentChange, onPriorityCh
                 onPriorityChange={onPriorityChange}
                 onDueChange={onDueChange}
                 onSectionChange={onSectionChange}
+                expandedTaskId={expandedTaskId}
+                onToggleExpand={onToggleExpand}
               />
             ))}
           </div>
@@ -121,6 +145,8 @@ function TreePreview({ editedStructured, onRemove, onContentChange, onPriorityCh
           onPriorityChange={onPriorityChange}
           onDueChange={onDueChange}
           onSectionChange={onSectionChange}
+          expandedTaskId={expandedTaskId}
+          onToggleExpand={onToggleExpand}
         />
       ))}
     </div>
@@ -200,6 +226,12 @@ export default function SuperRambleModal({ onClose }) {
   // picks one; a later pick just overwrites it, both here and server-side
   // (POST /api/structure/feedback is a toggle, not an append-only log).
   const [feedback, setFeedback] = useState(null);
+  // Which preview row (a flattenTasks ref, or null) is expanded into its own
+  // editable card, TaskRow.jsx's accordion: at most one at a time, across
+  // the whole tree, not per-parent. Lives here rather than inside
+  // TreePreview itself so the existing Escape handler below can collapse it
+  // first, before ever considering closing the whole modal.
+  const [expandedTaskId, setExpandedTaskId] = useState(null);
   // `edited` is the working copy the preview actually renders and Confirm
   // actually writes: a deep clone of `structured`, seeded once per proposal,
   // mutated only through removeTask/editTaskContent/editProjectName below.
@@ -242,6 +274,14 @@ export default function SuperRambleModal({ onClose }) {
   useEffect(() => {
     function onKey(e) {
       if (e.key === 'Escape' && !confirming) {
+        // A row expanded into its own edit card collapses first: the same
+        // "Escape closes the nearest thing, not everything" convention this
+        // app already uses elsewhere, and without this check Escape while
+        // editing a row would blow past it and close the whole modal.
+        if (expandedTaskId !== null) {
+          setExpandedTaskId(null);
+          return;
+        }
         if (state !== 'loading' && state !== 'recording') onClose();
         else if (canCloseWhileWaiting) cancelWaiting();
       }
@@ -249,7 +289,7 @@ export default function SuperRambleModal({ onClose }) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose, state, confirming, canCloseWhileWaiting]);
+  }, [onClose, state, confirming, canCloseWhileWaiting, expandedTaskId]);
 
   // Ticks once a second while a callModel attempt is in flight, purely for
   // display (docs/roadmap.md's real-percentile copy below): the actual
@@ -445,6 +485,7 @@ export default function SuperRambleModal({ onClose }) {
       setEdited(JSON.parse(JSON.stringify(result)));
       setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [] });
       setFeedback(null);
+      setExpandedTaskId(null);
       setTraceId(traceIdRef.current);
       setState('preview');
     } catch (err) {
@@ -463,6 +504,7 @@ export default function SuperRambleModal({ onClose }) {
     setEdited(null);
     setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [] });
     setFeedback(null);
+    setExpandedTaskId(null);
     setErrorMsg('');
   }
 
@@ -474,6 +516,11 @@ export default function SuperRambleModal({ onClose }) {
   // log too, since there is no task left for it to describe.
   function removeTask(task) {
     setEdited((prev) => ({ ...prev, tasks: updateTaskAtRef(prev.tasks, task.id, () => null) }));
+    // A stale expandedTaskId pointing at a ref that no longer exists is
+    // harmless (no row will ever match it again, so the accordion just reads
+    // as fully collapsed), but clearing it outright when it's the exact row
+    // just removed keeps the state honest rather than relying on that.
+    setExpandedTaskId((cur) => (cur === task.id ? null : cur));
     setEditLog((log) => ({
       removedTasks: [...log.removedTasks, { content: task.content, priority: task.priority, sectionRef: task.sectionId ?? null }],
       contentEdits: log.contentEdits.filter((e) => e.ref !== task.id),
@@ -774,6 +821,22 @@ export default function SuperRambleModal({ onClose }) {
                 );
               }
               const isNewProject = structured.decision === 'project' && !structured.targetProjectId;
+              // The other two real routing outcomes, same three-way split
+              // toProjectTree itself resolves at Confirm-time
+              // ({ id: structured.targetProjectId || inboxId }): routing into
+              // a real existing project, or no project at all, loose tasks
+              // landing in Inbox. Both used to render with zero indication of
+              // where things were headed, the same "mixed, hard to tell what
+              // is happening" gap the isNewProject-only label already closed
+              // for the new-project case. See docs/design-system.md's
+              // "Settings modal" section for the label-above-value
+              // convention this reuses, and docs/resolution-log.md,
+              // 2026-07-17.
+              const targetProject =
+                structured.decision === 'project' && structured.targetProjectId
+                  ? projects.find((p) => p.id === structured.targetProjectId)
+                  : null;
+              const isLooseTasks = structured.decision === 'tasks';
               // Hidden entirely outside this one case: routing into an
               // existing project, loose tasks, and "not connected" all skip
               // a second real external write nobody asked for here. See
@@ -826,6 +889,18 @@ export default function SuperRambleModal({ onClose }) {
                           onChange={(e) => editProjectName(e.target.value)}
                         />
                       </>
+                    ) : targetProject ? (
+                      <>
+                        <span className="sr-project-name-label">Adding to existing project</span>
+                        <div className="sr-project-name-value">
+                          <span className="project-hash" style={{ color: colorHex(targetProject.color) }}>
+                            #
+                          </span>
+                          {targetProject.name}
+                        </div>
+                      </>
+                    ) : isLooseTasks ? (
+                      <span className="sr-project-name-label">Loose tasks, added to Inbox</span>
                     ) : null}
                     <TreePreview
                       editedStructured={edited}
@@ -834,6 +909,8 @@ export default function SuperRambleModal({ onClose }) {
                       onPriorityChange={editTaskPriority}
                       onDueChange={editTaskDue}
                       onSectionChange={editTaskSection}
+                      expandedTaskId={expandedTaskId}
+                      onToggleExpand={(t) => setExpandedTaskId(t ? t.id : null)}
                     />
                   </div>
                   <div className="modal-footer">

@@ -257,18 +257,70 @@ identical input:
 
 - **Fully editable, not just per-task removal, an inline project-name edit,
   and per-task content edits.** Priority, due date, and section membership
-  are editable too, each a small chip trigger on `TaskRow`'s editable rows
-  (`.task-edit-controls`, always visible, not hover-revealed like
-  `.task-row-actions`: these are primary editing controls this whole
-  preview exists for, "click any task to edit," not a secondary row
-  action). Priority reuses `PriorityPicker.jsx` directly; due date reuses
-  `DatePicker.jsx`, reading only its `date` back out as a plain ISO string,
-  never the store's full due shape; section membership is a small new
-  local picker (`SectionRefPicker`, `TaskRow.jsx`) over the response's own
-  local `sections` plus "No section," matching the exact `.chip`+`Popover`
-  shape every other picker in this app already uses, root tasks only
-  (depth 0), since a sub-task has no `sectionRef` of its own in this
-  contract.
+  are editable too. Priority reuses `PriorityPicker.jsx` directly; due date
+  reuses `DatePicker.jsx`, reading only its `date` back out as a plain ISO
+  string, never the store's full due shape; section membership is a small
+  new local picker (`SectionRefPicker`, `TaskRow.jsx`) over the response's
+  own local `sections` plus "No section," matching the exact
+  `.chip`+`Popover` shape every other picker in this app already uses, root
+  tasks only (depth 0), since a sub-task has no `sectionRef` of its own in
+  this contract.
+- **Collapsed by default, click a row to expand it into an edit card, 2026-07-17,
+  reported against real Todoist's own Text Scan preview on the same input.**
+  Superseding this same section's original "always visible" `.task-edit-controls`
+  treatment above: showing every row's input and full chip row at once, on
+  every task simultaneously, was the direct cause of the cluttered look
+  found comparing the two (a real date chip sitting right above an empty
+  gray "Priority"/"Date" ghost-chip pair, on every single row). Now a row
+  collapses to the same plain `.task-content` div and read-only `.task-meta`
+  line every non-editable row in this app already renders (just the due
+  chip, if one is set); clicking the row's main area (not the remove "x")
+  expands it into `.task-edit-card`, a bordered box reusing the exact
+  in-place-expansion convention `.inline-add`/`.comment-add-box` already
+  established (thin `1px solid var(--ds-line)`, `--ds-canvas` background,
+  not a new visual language): the content input, the `.task-edit-controls`
+  row (now only rendered here, not on every row), and a single "Done"
+  button collapsing back, its checkmark tinted `--ds-due-green`. A single
+  `expandedTaskId`, lifted to `SuperRambleModal.jsx` itself (not
+  `TreePreview`, so the modal's own existing Escape handler can collapse an
+  expanded row before ever considering closing the whole modal), makes this
+  an accordion: at most one row expanded at a time, across the whole tree,
+  matching the reference screenshots exactly. **No Cancel beside Done**:
+  every field here already writes to `edited` state directly, there is no
+  local draft a Cancel would revert, so a second button would look like it
+  discards changes without doing so, not a faithful copy of Todoist's own
+  X/check pair (which does have a real draft behind it). Deliberately does
+  **not** add a Description field, a Reminders field, a "..." overflow, or a
+  per-task project-reassignment picker, even though Todoist's own reference
+  card shows all four: neither `task` nor `subtask` carries a `description`
+  in the Structure contract at all yet (`docs/llm-pipeline.md`, Stage 2,
+  its own named future item, `docs/roadmap.md`'s "Next" section); Reminders
+  were removed from this app's entire data model on purpose
+  (`docs/architecture.md`); and there is no mechanism for routing one task
+  within a single Structure response into an arbitrary different project,
+  the whole response writes into one project (or Inbox) in one
+  `createProjectTree` batch (`src/pipeline/write.js`'s `toProjectTree`), so
+  real per-task cross-project reassignment would be an architecture change,
+  not a UI fix. See `docs/resolution-log.md`, 2026-07-17.
+- **A three-way header, same date, same reference comparison: which of new
+  project, existing project, or loose tasks this response resolves to was
+  only ever shown for the new-project case before this pass** (the
+  "Suggested project name" label below), leaving the other two real
+  outcomes indistinguishable from each other and from a blank state.
+  `.sr-project-name-label`'s label-above-value convention now covers all
+  three: **new project** keeps "Suggested project name" above the real,
+  editable `.sr-project-name-input`, unchanged; **existing project**
+  (`structured.targetProjectId` set) shows "Adding to existing project"
+  above a plain, read-only `.sr-project-name-value` (not renameable here),
+  the resolved project's own name next to the same colored "#" hash glyph
+  the sidebar project list uses for identity (`.project-hash`,
+  `colorHex(project.color)`, this section's "Sidebar project list" bullet
+  below), not a plain string; **loose tasks** (`structured.decision ===
+  'tasks'`) shows only the label, "Loose tasks, added to Inbox," no input,
+  no value line, since there is no project to name. All three read directly
+  off `toProjectTree`'s own real routing
+  (`{ id: structured.targetProjectId || inboxId }`, `src/pipeline/write.js`),
+  not a separate guess at what Confirm will do.
 - **A pinned transcript snippet and a task-count line**, both at the top of
   the preview, above the reasoning/confidence line: `.sr-transcript-snippet`
   is a small muted box (`--ds-ink-soft`, a light background tint, not a
@@ -282,6 +334,15 @@ identical input:
   primary element ("One primary action per surface" above extends to not
   over-emphasizing secondary content too); the snippet is deliberately
   quieter than the reasoning text, not equally loud.
+- **`.sr-reasoning` clamps to 2 lines, 2026-07-17**, the same
+  `-webkit-line-clamp` technique `.task-desc-clamp` already established for
+  a card description (`docs/resolution-log.md`, 2026-07-15), a defensive
+  backstop, not the primary fix: the prompt itself now also asks for one or
+  two short sentences (`src/pipeline/prompt.js`'s `SYSTEM_PROMPT`,
+  hand-synced into `functions/index.js`'s `STRUCTURE_SYSTEM_PROMPT_RULES`),
+  but an occasional longer response still should not be able to grow the
+  preview's layout. Two lines here, not three, since this sits above the
+  task list as a quick "why," not inside a card.
 - **A thumbs up/down feedback signal**, on the same line as the confidence
   percentage (`.sr-confidence-row`, `.sr-feedback`), independent of and
   before any Confirm/Discard decision: a lighter-weight, second signal than
