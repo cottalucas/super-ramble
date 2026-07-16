@@ -15,7 +15,8 @@ import {
   IconDots,
   IconCaret,
   IconSidebarToggle,
-  IconSparkle
+  IconSparkle,
+  IconSettings
 } from './Icons.jsx';
 import { isToday, isOverdue, timeAgo } from '../lib/date.js';
 import { colorHex } from '../lib/colors.js';
@@ -400,9 +401,27 @@ export default function Sidebar({ view, onNavigate, onToggleSidebar, mobile = fa
     <aside className={`sidebar ${mobile ? 'sidebar-mobile' : ''}`}>
       <div className="sidebar-head">
         <span className="sidebar-head-trigger-wrap popover-wrap">
-          <button type="button" className="sidebar-head-trigger" onClick={() => setAvatarMenuOpen((v) => !v)}>
+          <button
+            type="button"
+            className={`sidebar-head-trigger ${avatarMenuOpen ? 'sidebar-head-trigger-open' : ''}`}
+            onClick={() => {
+              // Not a toggle: Popover's own outside-click handling (mousedown
+              // on document) already closes this on any click outside its
+              // content, including this trigger button itself, since
+              // Popover's anchor is its own zero-size marker span, not this
+              // button. A plain toggle here fought that: closing via
+              // Popover's mousedown, then this same click's onClick flipping
+              // it straight back open, so a second click on the trigger
+              // never actually closed the menu. Found live, verifying this
+              // exact interaction per instruction, not assumed safe from a
+              // CSS-only change. Only ever opens; Popover's own handling is
+              // solely responsible for closing, from any cause (outside
+              // click, Escape, or this trigger clicked again).
+              if (!avatarMenuOpen) setAvatarMenuOpen(true);
+            }}
+          >
             <span className="avatar">{(user.displayName || 'You').slice(0, 1).toUpperCase()}</span>
-            <span style={{ flex: 1 }}>{user.displayName || 'You'}</span>
+            <span>{user.displayName || 'You'}</span>
             <IconCaret width={14} height={14} className="sidebar-head-caret" />
           </button>
           {avatarMenuOpen ? (
@@ -420,6 +439,7 @@ export default function Sidebar({ view, onNavigate, onToggleSidebar, mobile = fa
                   setSettingsOpen(true);
                 }}
               >
+                <IconSettings width={16} height={16} className="icon" />
                 Settings
               </button>
               {!isLocal ? (
