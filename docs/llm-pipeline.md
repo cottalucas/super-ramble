@@ -383,6 +383,19 @@ got persisted to the trace at request time already; editing the preview
 only changes what Confirm actually writes and what the outcome POST below
 reports about it.
 
+**Description joined the same editable set, 2026-07-17 round 2**, a fourth
+field-level edit kind wired exactly like priority/due/section membership
+above (`editTaskDescription`, the same `updateTaskAtRef` mechanism, the
+same `{ ref, from, to }` capture-once discipline). Unlike `labels`/per-task
+`description` on the Structure contract itself (still out, see "targetProjectId"
+above), this is not a contract change: `description` is a real,
+already-existing field on this app's actual task schema
+(`docs/architecture.md`), editable everywhere else in the app
+(`TaskDetail.jsx`), Structure's own response just never populates it. The
+preview's edit card adds a plain textarea for it, no model behind it, the
+same "no model behind it" reasoning a plain Add-task form's own description
+field already has.
+
 That makes the outcome three real states, not two: `"confirmed_with_edits"`
 (`docs/architecture.md`'s `structureTraces` field list has the full `edits`
 shape, now six arrays/objects, not three) sits alongside `"confirmed"` and
@@ -457,10 +470,10 @@ write past that deletes the oldest auto-promoted one, never a seed.
 **Reconstruction is honest about what it can and cannot do, and this is a
 real, documented limitation, not an oversight.** `structureTraces` only
 ever persists `response` (the model's real, untouched output) and `edits`
-(a diff: `removedTasks`, `contentEdits`, `projectNameChange`, and, as of
-this pass, `priorityEdits`/`dueEdits`/`sectionEdits`), never a second full
-corrected tree, so the corrected tree has to be replayed onto a clone of
-`response`. Content edits are always reliable:
+(a diff: `removedTasks`, `contentEdits`, `projectNameChange`,
+`priorityEdits`/`dueEdits`/`sectionEdits`, and, as of 2026-07-17 round 2,
+`descriptionEdits`), never a second full corrected tree, so the corrected
+tree has to be replayed onto a clone of `response`. Content edits are always reliable:
 `contentEdits[].originalContent` is captured client-side on the first edit
 to a task, before any change, so it always matches the pristine response.
 Removals are reliable in the common case, a task removed without ever
@@ -478,20 +491,20 @@ to stay generic and reusable across any future call, never tied to one
 real historical Firestore id, the same reason the four original seed
 examples all have `targetProjectId: null` to begin with, not by accident.
 
-**`priorityEdits`/`dueEdits`/`sectionEdits` are not replayed at all, this
-pass, a stated scope boundary, not an oversight.** `reconstructCorrectedTree`
-only ever applies `contentEdits`, `removedTasks`, and `projectNameChange`
-onto the cloned response. When a `confirmed_with_edits` trace's `edits`
-carries any of the three newer arrays, `gradeStructureTrace` skips
-auto-promotion outright before ever calling `reconstructCorrectedTree`,
-the same "do not guess" posture the removedTasks-miss case above already
-takes: a reference example silently missing a real priority, date, or
-section correction the user actually made would teach the live model the
-model's own original, uncorrected value, worse than not promoting at all.
-Replaying these three onto the reconstructed tree is real, separate,
-future work; until then a trace with any of them logs to
-`pipelineLearningLog` for the monthly human review instead, same as any
-other flagged case below.
+**`priorityEdits`/`dueEdits`/`sectionEdits`/`descriptionEdits` are not
+replayed at all, a stated scope boundary, not an oversight.**
+`reconstructCorrectedTree` only ever applies `contentEdits`,
+`removedTasks`, and `projectNameChange` onto the cloned response. When a
+`confirmed_with_edits` trace's `edits` carries any of these four newer
+arrays, `gradeStructureTrace` skips auto-promotion outright before ever
+calling `reconstructCorrectedTree`, the same "do not guess" posture the
+removedTasks-miss case above already takes: a reference example silently
+missing a real priority, date, section, or description correction the user
+actually made would teach the live model the model's own original,
+uncorrected value, worse than not promoting at all. Replaying these four
+onto the reconstructed tree is real, separate, future work; until then a
+trace with any of them logs to `pipelineLearningLog` for the monthly human
+review instead, same as any other flagged case below.
 
 Every other flagged case, cancelled, a plain confirm the grader still
 flagged, or a confirmed-with-edits trace where auto-promotion could not be

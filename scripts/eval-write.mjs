@@ -198,6 +198,25 @@ const inboxId = 'inbox-1';
   check('edit-section', "editing a task's sectionRef moves it into that section", taskByContent(tree, 'Task B').sectionRef, 'sec1');
 }
 
+// --- Editing a task's description carries through, description absent on the model's own raw response flattens to '' ---
+{
+  const s = baseStructured();
+  s.tasks = updateTaskAtRef(s.tasks, 't0', (t) => ({ ...t, description: 'Bring extra socks' }));
+  const tree = toProjectTree(s, { inboxId });
+  check(
+    'edit-description',
+    "editing a task's description replaces it, a real already-existing task field Structure's own contract never populates",
+    taskByContent(tree, 'Task A').description,
+    'Bring extra socks'
+  );
+  check(
+    'description-defaults-empty',
+    "a task Structure never gave a description flattens to '', not undefined",
+    taskByContent(tree, 'Task B').description,
+    ''
+  );
+}
+
 // --- Full editable-preview path: a removal, a content edit, and a rename together ---
 {
   const s = baseStructured();

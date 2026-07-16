@@ -3,6 +3,180 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-17 (second round): Six scoped fixes to the Super Ramble preview and one global checkbox-hover fix, from a fresh round of feedback against the same-day pass below
+
+Read `docs/orchestration.md`, the full `docs/` set, and the entry directly
+below (the same-day "Four scoped fixes" pass) in full before touching
+`TaskRow.jsx` or `SuperRambleModal.jsx` this round too, since several things
+there were deliberate, not oversights, and this round builds on top of them
+rather than redoing them.
+
+**Not touched this round, stated up front for whoever reads this entry next
+wondering about it:** the classification/confidence logic itself.
+`decision`/`confidence` are produced entirely by the model against the
+unchanged `STRUCTURE_JSON_SCHEMA` and unchanged classify-vs-structure prompt
+rules; nothing in this round or the same-day round below touches that logic.
+A transcript landing at, say, 62% confidence and `decision: "tasks"` instead
+of `"project"` is the model's own real judgment call on that input, not a
+regression from the reasoning-brevity or UI changes shipped in either round.
+Tightening that judgment call (e.g. a confidence-calibration prompt rule) is
+a separate, scoped decision for later, not folded into either of these
+passes.
+
+**Item 1: the loading estimate is one line, not two.** `SuperRambleModal.jsx`'s
+loading state used to render `.sr-loading-estimate` ("Usually under {P50}s.
+Longer or more tangled brain-dumps can take up to {P90}s.") as its own
+paragraph above `.sr-loading-elapsed` ("{n}s elapsed"). The `.sr-loading-bar-fill`
+directly above both already encodes the P90 ceiling visually (its width is
+`elapsed / P90`), so stating the ceiling a second time in text was pure
+redundancy. Collapsed into one line, `{n}s elapsed, usually under {P50}s.`,
+dropped the explicit "can take up to {P90}s" clause entirely, and removed
+`.sr-loading-estimate` from `styles.css` rather than leave a dead class
+behind. `.sr-loading-elapsed` itself was kept and repurposed for the merged
+line (just its `margin` adjusted), since it was already the right class for
+"the elapsed-time line," now carrying more text.
+
+**Item 2: the reasoning sentence is actually shorter, not just clipped
+harder.** The 2-line `-webkit-line-clamp` on `.sr-reasoning` (added the
+round below) was cutting real sentences off mid-word when the model still
+returned more than the prompt asked for, which reads as broken rendering,
+not a concise summary. Fixed the cause first: `SYSTEM_PROMPT`
+(`src/pipeline/prompt.js`) and `STRUCTURE_SYSTEM_PROMPT_RULES`
+(`functions/index.js`) both had "...Keep it to one or two short sentences,
+not a paragraph." tightened, identically, character for character, to
+"...Keep it under 20 words, one plain sentence." — `npm run check:prompt-sync`
+passed after editing both, confirming the pair is still byte-identical.
+The CSS clamp was then loosened from 2 to 3 lines (matching
+`.task-desc-clamp`'s own 3-line precedent, 2026-07-15 entry below), so it now
+functions as a rare backstop for a genuine outlier rather than the primary
+length-control mechanism, which is what was cutting sentences mid-word
+before.
+
+**Item 3: global checkbox-hover opacity, not Super Ramble-specific.**
+`.checkbox:hover .check` only reached `opacity: 0.5` on an already-muted
+`--ds-ink-soft` color (or a priority color), reported against a Board card
+but true of every task checkbox in the app, since the rule is unscoped to
+any one view. Bumped to `0.9`. The completed-state's own full opacity and
+every priority color are untouched; only the hover-only intermediate state
+changed.
+
+**Item 4: a real description field, and a Todoist-style footer replacing
+"Done."** `description` is a real, pre-existing field on this app's task
+schema (`docs/architecture.md`, `users/{uid}/tasks/{taskId}.description`,
+editable everywhere else via `TaskDetail.jsx`), unlike Reminders (removed
+from the whole data model on purpose) or a per-task project reassignment (no
+mechanism exists for it at all). Structure's own contract still never
+populates it and doesn't need to — this is a plain user-typed field in the
+preview, exactly like typing a description into the normal Add-task form has
+no model behind it. `STRUCTURE_JSON_SCHEMA`, `contracts.js`, and both system
+prompts are unchanged; the model is never asked to write one.
+
+Wired the same way `priorityEdits`/`dueEdits`/`sectionEdits` were each wired
+in (2026-07-16 "five scoped pieces" entry below, Part 2): a `descriptionEdits`
+array in `editLog` (`{ ref, from, to }`, capture-once discipline, reset on a
+fresh proposal, on `backToEdit()`, and filtered out of `removeTask`'s log the
+same as the other three), `editTaskDescription(task, newValue)` mirroring
+`editTaskDue`/`editTaskSection` exactly, a `descriptionEdits` filter
+(`e.from !== e.to`) folded into `hasEdits` and the `confirmed_with_edits`
+outcome payload at Confirm-time. `functions/index.js`'s `isValidEdits` gained
+the same shape-check the other three arrays already have
+(`isValidDescriptionValue`, a plain string check). `gradeStructureTrace`'s
+auto-promotion path now skips replay for `descriptionEdits` too, the same
+fail-closed reasoning already documented for the other three: promoting a
+tree that silently drops a real edit would teach the live model its own
+uncorrected value, worse than not promoting at all. The field itself was
+plumbed through `flattenTasks` (`src/pipeline/write.js`, `description: t.description || ''`
+on both the root-task and subtask push); `toProjectTree` needed no change of
+its own, it already forwards every field a flattened row carries.
+
+In the card: a plain `<textarea>` under the content input, placeholder
+"Description", empty by default. The single "Done" button was replaced with
+a `.task-edit-footer` row (flex, space-between): left side is the existing
+`SectionRefPicker` (unchanged behavior, root tasks only, when
+`sections.length`), moved out of `.task-edit-controls` into the footer;
+right side is a Todoist-style X/check icon-button pair, where the check
+collapses the card (`onToggleExpand(null)`, what "Done" already did) and the
+X calls the same `onRemove(task)` the row's outer top-right remove-x already
+called — a real remove, not a no-op "cancel," since every field here writes
+live and there is no local draft to revert. The row's own outer top-right
+remove-x is now hidden while its edit card is open, so exactly one remove
+control is visible at a time. `.task-edit-controls` keeps just Priority and
+Date.
+
+**Known, deliberate edge case: an empty footer-left is possible, and that's
+correct, not a bug.** When there's no `SectionRefPicker` to show (a
+sub-task, or a root task with no sections) *and* `previewProject` is `null`
+(the brand-new-project case, see item 5), the footer's left side shows
+nothing at all — confirmed live via the dev-mock "new project" scenario.
+This was not patched with an extra fallback (e.g. showing the tentative
+typed project name), since inventing a stand-in for a project that doesn't
+exist yet as a real entity would be scope creep beyond what was asked; the
+header's own "Suggested project name" label already covers this case
+unambiguously elsewhere on screen.
+
+**Item 5: every row shows which project it's headed to, not just the
+header.** The three-way header (new project / existing project / loose
+tasks → Inbox, built the round below) states this once at the top;
+individual rows showed nothing, unlike real Todoist's Text Scan, which
+labels every row. Reused the exact resolution the header already computes
+(`targetProject`, `isLooseTasks`) to build one
+`previewProject = targetProject || (isLooseTasks ? projects.find((p) => p.id === inboxId) : null)`,
+threaded through `TreePreview` to every `TaskRow` as `showProject={Boolean(previewProject)}`
+and `project={previewProject}` — props `TaskRow` already rendered via its
+existing `.meta-project`/`.project-dot` block, no new rendering code needed.
+Left `null` for the `isNewProject` case on purpose: there's no real project
+entity yet (no color, name still editable), and the header's own label
+already covers it. This same `previewProject` value is reused for item 4's
+footer fallback label too — one resolution computed once, not two.
+
+**Restated on purpose, for the second time, so it stops getting re-asked:**
+Reminders and a "..." overflow menu are still out because Reminders was
+removed from this app's entire data model on purpose (2026-07-17 entry
+below), and per-task project reassignment is still out because no mechanism
+exists for routing one task out of a single Structure response into an
+arbitrary different project (same entry). Neither changed this round.
+
+**Verification.** All six items were driven live in the browser via the
+same `__DEV_MOCK__` stub pattern used every round this session (a
+special-cased branch in `submit()` matching magic transcript strings,
+`VITE_ENABLE_LOCAL_PREVIEW=true` in `.env.local` for local dev only): the new-
+project, existing-project, and loose-tasks scenarios were each exercised end
+to end, covering expand/collapse, description editing and its persistence
+into the edited tree, the footer's Remove/Done buttons, the per-row project
+chip on both root and sub-task rows (collapsed meta-line and expanded footer
+fallback), and the reasoning clamp at both a short (non-clamped) and a
+deliberately long (3-line-clamped) length. The checkbox hover fix was
+confirmed by reading the live stylesheet rule directly
+(`.checkbox:hover .check` computed `opacity: 0.9`), not by a synthetic
+`mouseover` dispatch, which does not trigger CSS `:hover`. The merged
+loading-estimate line was verified by inspection of the rendered JSX/CSS
+rather than caught mid-flight in a screenshot (the same bar-rendering
+mechanism it sits beside was already proven live the round below). The stub
+was then fully reverted (`grep` across `src/` and `functions/` for
+`__DEV_MOCK__`/`dev-mock-trace` returns no matches), `.env.local`'s
+`VITE_ENABLE_LOCAL_PREVIEW` reverted to `false`, `npm run verify:prod-env`
+passed, and the rebuilt production bundle's output hash
+(`index-Cx6xOgmU.css` / `index-BPtub0nE.js`) matched the pre-stub build
+exactly, proof the stub left zero trace in the shipped bundle. `npm run eval`
+(26/26 Todoist, 18/18 Write — up from 16/16 with the two new description
+cases, `check:prompt-sync` passed) and `node scripts/check-secrets.mjs` both
+clean.
+
+### Decisions not to relitigate
+
+- Classification/confidence logic is untouched by this round (see above);
+  don't assume a `decision`/`confidence` behavior change happened here.
+- `descriptionEdits` follows the exact same fail-closed auto-promotion-skip
+  posture as `priorityEdits`/`dueEdits`/`sectionEdits`. Do not special-case it
+  as replayable later without revisiting that reasoning.
+- Reminders, a "..." overflow menu, and per-task project reassignment remain
+  out on purpose, restated here a second time; don't re-propose without a
+  scoped decision to add the missing mechanism first.
+- An empty `.task-edit-footer-left` for a new-project sub-task (or
+  section-less root task) is a known, correct consequence of `previewProject`
+  being `null` for `isNewProject`, not a bug to silently patch with an
+  invented fallback.
+
 ## 2026-07-17: Four scoped fixes to the Super Ramble preview flow, found comparing our own screenshots against real Todoist's "Text Scan" on the same input
 
 One branch, four items, building on the 2026-07-16 "five scoped pieces"
