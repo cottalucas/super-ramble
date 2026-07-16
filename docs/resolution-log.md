@@ -3,6 +3,190 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-17: Four scoped fixes to the Super Ramble preview flow, found comparing our own screenshots against real Todoist's "Text Scan" on the same input
+
+One branch, four items, building on the 2026-07-16 "five scoped pieces"
+entry below (the editable preview, the task-count/transcript summary, the
+thumbs feedback signal): read that entry in full before touching
+`TaskRow.jsx` or `SuperRambleModal.jsx`, as instructed, since it explains
+why several things were already built the way they were found. `docs/orchestration.md`
+and the full `docs/` set read fresh first too.
+
+**Item 1: the loading estimate's real numbers.** `npm run structure:timing-stats`
+(after one transient Cloud Logging 429, retried and succeeded) still
+reports only 8 real calls total, but a finding worth stating plainly: every
+one of the 8 is the identical test transcript ("Portugal trip... Sarah
+keeps asking..."), all dated 2026-07-14, the Hosting-cutoff/timeout
+diagnostic session (`docs/architecture.md`), confirmed directly by reading
+each trace's own `transcript` field back out of Firestore, not assumed
+from the timing data alone. This is not diverse organic usage; it is one
+transcript run repeatedly under differing test conditions. The sample is
+sharply bimodal, not smooth: 2 calls at 9.4s/10.2s (under 1000 output
+tokens), 6 calls at 71-96s (near the 8192 `max_tokens` cap). The naive
+overall p50 across all 8 (81.4s) is dragged almost entirely by the 6 slow
+calls and would still read exactly as wrong against a fast real call as the
+old 82s guess did, the same "obviously wrong" framing that motivated this
+item, so `STRUCTURE_P50_SECONDS` now uses the fast bucket instead
+(p50=9.4s, p90=10.2s, rounded up to a clean **10**), since that is what
+"usual" means for a call that is not pushing the model to its own output
+ceiling. `STRUCTURE_P90_SECONDS` stays **96** on purpose, unchanged: the
+real near-max-token/overall p90 (96.2s) already matches, and the existing
+copy already frames it as the complex-dump ceiling, not the typical case.
+Re-run this script once real, varied usage (not one repeated test
+transcript) accumulates; `docs/roadmap.md`'s "Next" section already flags
+this as due for revisiting periodically.
+
+**Item 2: click a task to open its edit card, collapsed by default.**
+`TaskRow.jsx`'s `editable` mode used to show every row's content input and
+full `.task-edit-controls` chip row simultaneously, on every task at once,
+the direct cause of the cluttered look found comparing against real
+Todoist's Text Scan (a real date chip sitting right above an empty gray
+"Priority"/"Date" ghost-chip pair). Now a row collapses to the same plain
+`.task-content` div and read-only `.task-meta` line every non-editable row
+in this app already renders; clicking the row's main area (not the remove
+"x") expands it into a new `.task-edit-card`, reusing the exact
+in-place-expansion convention `.inline-add`/`.comment-add-box` already
+established (thin `1px solid var(--ds-line)` border, `--ds-canvas`
+background, not a new visual language): the content input, the
+`.task-edit-controls` row (now only rendered here, not always-on), and a
+single "Done" button (`.task-edit-done`, checkmark tinted `--ds-due-green`)
+collapsing back. `expandedTaskId` (a `flattenTasks` ref, or `null`) is
+threaded through `TaskRow`'s recursion as the raw value, never a
+pre-resolved boolean: each row compares it against its own `task.id`,
+otherwise a child row's own accordion state would be wrong at any depth
+past the one that first received a resolved boolean (caught this while
+wiring the recursive call, before it ever reached the browser).
+
+**Lives in `SuperRambleModal.jsx`, not `TreePreview`, a deliberate
+deviation from a literal reading of "lift into TreePreview."** The state
+has to be reachable from the modal's own existing Escape handler, so an
+expanded row collapses first, before the handler ever considers closing
+the whole modal; keeping it inside `TreePreview` alone would have left no
+clean way for that handler to know a row was open without new prop/ref
+plumbing in the other direction. `TreePreview` is still the only component
+that branches on it for rendering, so the accordion behavior itself (one
+row expanded at a time, across the whole tree) is unaffected by exactly
+whose `useState` call owns the value. Reset to `null` on a fresh proposal
+(`submit()`), on `backToEdit()`, and when the exact expanded task is
+removed (`removeTask`, a merely-tidy clear: a stale ref pointing at a
+removed row is already harmless on its own, since no remaining row would
+ever match it).
+
+**Deliberately left out, three things Todoist's own reference card shows
+that this one does not:** a Description field (neither `task` nor
+`subtask` carries a `description` in the Structure contract at all yet,
+`docs/llm-pipeline.md` Stage 2, already its own named future item,
+`docs/roadmap.md`'s "Next" section); a Reminders field (removed from this
+app's entire data model on purpose, `docs/architecture.md`, not an
+oversight to quietly work around); and a per-task project-reassignment
+picker (there is no mechanism for routing one task within a single
+Structure response into an arbitrary different project, the whole
+response writes into one project or Inbox in one `createProjectTree`
+batch, `src/pipeline/write.js`'s `toProjectTree`, so real per-task
+cross-project reassignment would be an architecture change, not a UI fix).
+**No Cancel beside Done either**: every field here already writes to
+`edited` state directly on every change, there is no local draft a Cancel
+would actually revert, so a second button would look like it discards
+changes without doing so, not a faithful copy of Todoist's own X/check
+pair (which has a real draft behind it).
+
+**Item 3: a three-way header — new project, existing project, or loose
+tasks.** `isNewProject`'s "Suggested project name" label used to be the
+only routing indicator that existed at all, leaving the other two real
+`decision`/`targetProjectId` outcomes indistinguishable from each other and
+from a blank state, the other half of the "mixed, hard to tell what is
+happening" gap found in the same screenshot comparison. Two more states,
+same `.sr-project-name-label` convention: **existing project**
+(`structured.targetProjectId` set) shows "Adding to existing project" above
+a new, read-only `.sr-project-name-value` (not renameable here, unlike the
+new-project input), the resolved project's own name
+(`projects.find((p) => p.id === structured.targetProjectId)`) next to the
+same colored "#" `.project-hash` glyph the sidebar project list already
+uses for identity, not a plain string; **loose tasks**
+(`structured.decision === 'tasks'`) shows only "Loose tasks, added to
+Inbox," no input, no value line. All three read directly off the same
+routing `toProjectTree` itself resolves at Confirm-time
+(`{ id: structured.targetProjectId || inboxId }`), not a separate guess.
+
+**Item 4: shorter reasoning, two layers, not one.** `SYSTEM_PROMPT`
+(`src/pipeline/prompt.js`) and `STRUCTURE_SYSTEM_PROMPT_RULES`
+(`functions/index.js`) both gained the identical sentence, appended to the
+existing reasoning-style rule: "Keep it to one or two short sentences, not
+a paragraph." `npm run check:prompt-sync` confirmed the two copies still
+match character for character. Not relying on the prompt alone:
+`.sr-reasoning` also gained a `-webkit-line-clamp: 2` CSS backstop, the
+same technique `.task-desc-clamp` already established for a card
+description (`docs/resolution-log.md`, 2026-07-15), so an occasional
+longer response still cannot grow the preview's layout. Two lines, not
+`.task-desc-clamp`'s three: this sits above the task list as a quick "why,"
+not inside a card. Deliberately did not add a hard `maxLength` to
+`STRUCTURE_JSON_SCHEMA.properties.reasoning` or to `validateStructure`: a
+length-based hard rejection would force a real corrective retry (this
+app's one-retry budget, `docs/llm-pipeline.md`) over cosmetic verbosity,
+not the kind of real structural problem that retry mechanism exists for.
+
+**Verification.** All five offline eval suites green (18/18 offline
+Structure, 19/19 date-parse, 12/12 date, 26/26 Todoist, 16/16 write,
+`check:prompt-sync` passed), `npm run build` clean, `node
+scripts/check-secrets.mjs` passed. Live verification used the same
+`__DEV_MOCK__` pattern the 2026-07-16 entry below established for this
+exact constraint (no reachable `/api/structure` backend in this
+environment, no Claude in Chrome connection or real Firebase Auth session
+available this pass either): `submit()` temporarily gained three magic-
+transcript branches (`__DEV_MOCK_NEW__`/`__DEV_MOCK_EXISTING__`/
+`__DEV_MOCK_TASKS__`), one per routing outcome, each waiting a few real
+seconds before resolving so the loading bar and elapsed timer had something
+to actually tick against; `VITE_ENABLE_LOCAL_PREVIEW` toggled to `true` for
+the local dev server only. Confirmed live, both themes: rows render
+collapsed by default with the real parsed due chip ("this weekend" ->
+"Saturday," a sub-task nested and collapsed underneath); clicking a row
+expands it into the bordered edit card with its real current
+priority/date/section pre-filled; editing priority inside the card updates
+both the chip and the checkbox ring color live, and survives collapsing
+back; expanding a second row collapses the first automatically (the
+accordion); a dispatched `Escape` keydown collapses an open card without
+closing the modal, and a second `Escape` then closes the modal, both
+confirmed via direct DOM/state checks, not just visually; all three header
+states rendered correctly for their respective mock transcripts, including
+the colored hash glyph for the existing-project case (a real project
+created in local-store for the test); the progress bar and its new "Usually
+under 10s..." copy rendered correctly, verified via injected markup after
+the real timed state proved too fast/hard to reliably catch mid-flight
+through this tool's own round-trip latency (the same fallback technique the
+2026-07-16 entry below used for the same reason). The stub was then
+reverted completely (`grep` confirmed no trace), `VITE_ENABLE_LOCAL_PREVIEW`
+set back to `false`, `npm run verify:prod-env` confirmed clean, and the
+production build's own output hash was confirmed byte-identical to the
+pre-stub build.
+
+### Decisions not to relitigate
+
+- `STRUCTURE_P50_SECONDS` (10) is deliberately not the naive overall p50
+  across all 8 real calls (81.4s); it is the fast-bucket p50, since all 8
+  calls are repeats of one diagnostic test transcript, not organic usage,
+  and the naive number would read exactly as wrong as the old 82s guess.
+  `STRUCTURE_P90_SECONDS` (96) is unchanged, still real, still the
+  complex-dump ceiling.
+- `expandedTaskId` lives in `SuperRambleModal.jsx`, not `TreePreview`, so
+  the modal's own Escape handler can collapse an expanded row before
+  considering closing the whole modal. Do not move it back into
+  `TreePreview` without first solving that same problem another way.
+- No Description, Reminders, "..." overflow, or per-task project-
+  reassignment picker in the preview's edit card. Each is a real, checked
+  gap against the Structure contract, the data model, or the write path,
+  not an oversight; see item 2 above for which doc already tracks each one
+  as its own future item.
+- No Cancel beside Done in the edit card. Every field already writes to
+  `edited` state directly; there is no local draft to revert.
+- The three-way header (new project / existing project / loose tasks)
+  reads directly off `toProjectTree`'s own routing logic. If that routing
+  ever changes, update all three label branches together, not just one.
+- `.sr-reasoning`'s 2-line clamp is a backstop, not the primary fix; the
+  prompt's own "one or two short sentences" instruction is. Do not add a
+  hard `maxLength` to the JSON schema or the validator for this; a
+  length-based rejection would spend this pipeline's one corrective retry
+  on cosmetic verbosity, not a real structural failure.
+
 ## 2026-07-16: Sidebar avatar-menu trigger, three refinements; Super Ramble loading bar and a "suggested" label on the project name; a real toggle bug found and fixed along the way
 
 Five items, one branch: items 1-3 are a direct refinement of the same day's

@@ -1731,9 +1731,19 @@ textarea:focus {
   text-overflow: ellipsis;
 }
 
+/* A defensive backstop, not the primary fix: the prompt itself now asks for
+   one or two short sentences (src/pipeline/prompt.js, functions/index.js,
+   docs/resolution-log.md, 2026-07-17), but an occasional longer response
+   still should not be able to blow up the preview's layout. Two lines, not
+   .task-desc-clamp's three: this sits above the task list, not inside a
+   card, so it should read as a quick "why," not a block of its own. */
 .sr-reasoning {
   color: var(--ds-ink);
   margin: 0 0 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .sr-task-count,
@@ -1796,6 +1806,23 @@ textarea:focus {
   font-family: inherit;
 }
 
+/* Read-only sibling of .sr-project-name-input: routing into an existing
+   project isn't renameable here, so this is a plain value, not an input,
+   same size/weight for the same reason .task-content-input matches its
+   row's own text. .project-hash is the exact sidebar-list glyph
+   (docs/design-system.md's "Sidebar project list" section), not a new
+   convention for showing a project's identity. */
+.sr-project-name-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 2px 0;
+  color: var(--ds-ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
 /* Editable preview (SuperRambleModal): a task's content becomes an inline
    text input in place of the plain .task-content div, borderless like
    .sr-project-name-input above, same size/weight as the row's own text so
@@ -1814,15 +1841,61 @@ textarea:focus {
 
 /* Editable preview: priority, due date, and section-membership triggers,
    one row of the same .chip controls Quick-add and Task detail already use.
-   Always visible, not hover-revealed like .task-row-actions: these are
-   primary editing controls the whole preview exists for ("click any task
-   to edit"), not a secondary row action. */
+   Only rendered while its own row is expanded (TaskRow.jsx's accordion,
+   docs/resolution-log.md, 2026-07-17), not always on: a collapsed row shows
+   the same read-only .task-meta line every other row in this app already
+   uses instead. */
 .task-edit-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin-top: 6px;
+}
+
+/* The expanded row's own edit surface: the same thin-border/canvas-
+   background in-place-expansion convention .inline-add and .comment-add-box
+   already use (docs/design-system.md's "Inline add-task" section), not a
+   new visual language. Replaces the old always-visible input + controls
+   that used to show on every row at once. */
+.task-edit-card {
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  background: var(--ds-canvas);
+  padding: 8px 10px;
+  margin: 2px 0;
+}
+
+.task-edit-card .task-content-input {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* No Cancel beside it: every field here already writes to `edited` state
+   directly, there is no local draft a Cancel would revert, so a second
+   button would look like it discards changes without doing so. The
+   checkmark tints --ds-due-green, the same token this app's due-date text
+   already uses, a quiet nod to "done" rather than a new button color. */
+.task-edit-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ds-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-edit-done:hover {
+  background: color-mix(in srgb, var(--ds-ink) 5%, transparent);
+}
+
+.task-edit-done .icon {
+  color: var(--ds-due-green);
 }
 
 /* The Todoist push toggle, new-project preview only. Sits left of the

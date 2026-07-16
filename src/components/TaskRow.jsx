@@ -107,19 +107,35 @@ function SectionRefPicker({ sections, value, onChange }) {
 //
 // `editable` (default false) is the newer, less-inert sibling of `readOnly`,
 // for a preview a user can still adjust before Confirm: the checkbox stays
-// disabled and the row stays unclickable (same as readOnly, nothing here is
-// a real task yet), but the content becomes an inline text input
-// (`onContentChange(task, newContent)`), a row of chip triggers lets
-// priority (`onPriorityChange(task, newPriority)`), due date
-// (`onDueChange(task, newRawDueOrNull)`, reusing DatePicker.jsx but reading
-// only its `date` back out as a plain ISO string, not the store's full due
-// shape, so it flows straight through toDue() unchanged at Confirm-time),
-// and section membership (`onSectionChange(task, newSectionRefOrNull)`,
-// `sections`, root tasks only, depth 0, since a sub-task has no sectionRef
-// of its own in this contract) all get edited too, and a plain "x" replaces
-// the Add-sub-task/"..." actions (`onRemove(task)`, no confirm dialog, since
-// nothing is written until the real Confirm). See SuperRambleModal.jsx,
-// the only caller of either mode.
+// disabled (nothing here is a real task yet), and a plain "x" replaces the
+// Add-sub-task/"..." actions (`onRemove(task)`, no confirm dialog, since
+// nothing is written until the real Confirm).
+//
+// Collapsed vs. expanded, matching real Todoist's own Text Scan preview
+// (docs/resolution-log.md, 2026-07-17): an editable row starts collapsed,
+// content as a plain `.task-content` div and the same read-only `.task-meta`
+// line every other row already renders (the due chip, if one is set), no
+// input, no controls. Clicking the row's main area (not the remove "x")
+// calls `onToggleExpand(task)`, which the caller (`TreePreview`,
+// `SuperRambleModal.jsx`) uses to drive a single `expandedTaskId`: only one
+// row across the whole tree is ever expanded at once, an accordion, matching
+// the reference screenshots. The expanded row swaps to a bordered
+// `.task-edit-card` (the same thin `1px solid var(--ds-line)` / `--ds-canvas`
+// in-place-expansion convention `.inline-add`/`.comment-add-box` already
+// use, docs/design-system.md's "Inline add-task" section, not a new visual
+// language): the content input, `onContentChange(task, newContent)`; the
+// `.task-edit-controls` row, now only rendered while expanded, not always
+// on: priority (`onPriorityChange`), due date (`onDueChange(task,
+// newRawDueOrNull)`, reusing DatePicker.jsx but reading only its `date` back
+// out as a plain ISO string, so it flows straight through toDue() unchanged
+// at Confirm-time), and section membership (`onSectionChange(task,
+// newSectionRefOrNull)`, `sections`, root tasks only, depth 0, since a
+// sub-task has no sectionRef of its own in this contract); and a single
+// "Done" button, `onToggleExpand(null)`, collapsing back. No Cancel:
+// every field here already writes to `edited` state directly on every
+// change, there is no local draft a Cancel would actually revert, so a
+// second button would look like it discards changes without doing so.
+// See SuperRambleModal.jsx, the only caller of either mode.
 export default function TaskRow({
   task,
   depth = 0,
@@ -148,7 +164,9 @@ export default function TaskRow({
   sections = [],
   onPriorityChange,
   onDueChange,
-  onSectionChange
+  onSectionChange,
+  expandedTaskId = null,
+  onToggleExpand
 }) {
   const kids = childrenOf.get(task.id) || [];
   const [expanded, setExpanded] = useState(true);
@@ -159,6 +177,12 @@ export default function TaskRow({
   const meta = dueMeta(task.due);
   const overdue = isOverdue(task.due);
   const inert = readOnly || editable;
+  // `expandedTaskId` is the raw id/ref, threaded down unchanged through
+  // recursion (never a pre-resolved boolean): each row compares it against
+  // its own task.id, the only way a single accordion value stays correct at
+  // every depth, not just the row that first received it.
+  const editOpen = editable && expandedTaskId === task.id;
+  const clickableToExpand = editable && expandedTaskId !== task.id;
   // Drawn as box-shadow/background states on the row itself, not a
   // mounted/unmounted sibling element: inserting or removing a DOM node as
   // dragPreview changes shifts every row below it by that node's height,
@@ -209,17 +233,35 @@ export default function TaskRow({
 
         <div
           className="task-main"
-          onClick={inert ? undefined : () => onOpen(task)}
-          style={{ cursor: inert ? 'default' : 'pointer' }}
+          onClick={
+            inert
+              ? clickableToExpand
+                ? () => onToggleExpand(task)
+                : undefined
+              : () => onOpen(task)
+          }
+          style={{ cursor: !inert || clickableToExpand ? 'pointer' : 'default' }}
         >
-          {editable ? (
-            <input
-              type="text"
-              className="task-content-input"
-              value={task.content}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => onContentChange(task, e.target.value)}
-            />
+          {editOpen ? (
+            <div className="task-edit-card" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="text"
+                className="task-content-input"
+                value={task.content}
+                onChange={(e) => onContentChange(task, e.target.value)}
+              />
+              <div className="task-edit-controls">
+                <PriorityPicker value={task.priority} onChange={(p) => onPriorityChange(task, p)} />
+                <DatePicker value={task.due} onChange={(next) => onDueChange(task, next?.date ?? null)} />
+                {depth === 0 && sections.length ? (
+                  <SectionRefPicker sections={sections} value={task.sectionId} onChange={(ref) => onSectionChange(task, ref)} />
+                ) : null}
+              </div>
+              <button type="button" className="task-edit-done" onClick={() => onToggleExpand(null)}>
+                <IconCheck width={14} height={14} className="icon" />
+                Done
+              </button>
+            </div>
           ) : (
             <div className="task-content">{task.content}</div>
           )}
@@ -227,7 +269,7 @@ export default function TaskRow({
             <div className={`task-desc ${variant === 'card' ? 'task-desc-clamp' : ''}`}>{task.description}</div>
           ) : null}
 
-          {(meta || (task.labels && task.labels.length) || showProject) && (
+          {!editOpen && (meta || (task.labels && task.labels.length) || showProject) && (
             <div className="task-meta">
               {meta ? <span className={`meta-due ${overdue ? 'overdue' : ''}`}>{meta}</span> : null}
               {(task.labels || []).map((l) => (
@@ -243,16 +285,6 @@ export default function TaskRow({
               ) : null}
             </div>
           )}
-
-          {editable ? (
-            <div className="task-edit-controls" onClick={(e) => e.stopPropagation()}>
-              <PriorityPicker value={task.priority} onChange={(p) => onPriorityChange(task, p)} />
-              <DatePicker value={task.due} onChange={(next) => onDueChange(task, next?.date ?? null)} />
-              {depth === 0 && sections.length ? (
-                <SectionRefPicker sections={sections} value={task.sectionId} onChange={(ref) => onSectionChange(task, ref)} />
-              ) : null}
-            </div>
-          ) : null}
 
           {kids.length ? (
             <button
@@ -351,6 +383,8 @@ export default function TaskRow({
               onPriorityChange={onPriorityChange}
               onDueChange={onDueChange}
               onSectionChange={onSectionChange}
+              expandedTaskId={expandedTaskId}
+              onToggleExpand={onToggleExpand}
             />
           ))
         : null}
