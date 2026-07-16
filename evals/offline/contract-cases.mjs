@@ -59,5 +59,27 @@ export const negativeCases = [
       ]
     },
     existingProjectIds: []
+  },
+  {
+    id: 'neg-standalone-with-section',
+    describe: 'a standalone task must not also carry a sectionRef, it is leaving the project\'s own sections entirely',
+    response: {
+      ...base,
+      decision: 'project',
+      project: { name: 'Apartment Move' },
+      sections: [{ ref: 'sec1', name: 'Packing' }],
+      tasks: [{ content: 'Pick up milk and eggs', priority: 3, due: null, sectionRef: 'sec1', standalone: true, subtasks: [] }]
+    },
+    existingProjectIds: []
+  },
+  {
+    id: 'neg-standalone-in-loose-tasks',
+    describe: 'decision "tasks" must not carry a standalone task, everything in it is already loose',
+    response: {
+      ...base,
+      decision: 'tasks',
+      tasks: [{ content: 'Pick up milk and eggs', priority: 3, due: null, standalone: true, subtasks: [] }]
+    },
+    existingProjectIds: []
   }
 ];

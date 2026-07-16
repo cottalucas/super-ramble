@@ -91,6 +91,7 @@ it lands.
         "priority": 1,
         "due": "string or null",
         "sectionRef": "local ref or null",
+        "standalone": false,
         "subtasks": [
           { "content": "string", "priority": 1, "due": "string or null" }
         ]
@@ -137,6 +138,24 @@ it lands.
   `sections`'s refs, which must resolve. A subtask has no `sectionRef` of its
   own; it belongs to its parent task, not directly to a section. Neither task
   nor subtask carries `description` or `labels` this pass.
+- `standalone` (root tasks only, optional, default false): a task the model
+  marks as a genuine outlier, unrelated to the project's own effort, even
+  though `decision` is `"project"` for the response as a whole. It goes to
+  the user's real Inbox on Write, separate from the project the rest of the
+  response describes, instead of being forced into the project's own "No
+  section" column for lack of anywhere else to put it. A subtask never
+  carries its own `standalone`; it always travels with its parent task,
+  wherever that task ends up. Two coherence rules, both enforced in
+  `validateStructure` (`src/pipeline/contracts.js`, mirrored in
+  `functions/contracts.js`): a `standalone: true` task must not also carry a
+  `sectionRef` (it is leaving the project's own sections entirely, not
+  filed under one of them), and `decision: "tasks"` must never carry a
+  standalone task (everything in a loose-tasks response is already outside
+  any project, so there is nothing left for `standalone` to mark it apart
+  from). This is a separate axis from `decision`/`confidence`, which judge
+  the whole transcript: `standalone` never hedges on whether the transcript
+  itself is project-shaped, and is not a substitute for "No section" on a
+  task that simply has no natural section of its own.
 - Priorities map to 1 to 4. Dates are inferred from natural language, left as
   the model's own string, not yet normalized to an ISO value.
 - If the dump is genuinely ambiguous, `needsClarification` is `true` and
@@ -251,11 +270,31 @@ spot-checked by hand (`EVAL_ALLOW_LIVE=true npm run eval:live` or a real
 
 ## Stage 3: Write
 
-Runs only on explicit user confirm. Translates the validated response into a
-`store.createProjectTree` call (flattening the nested `subtasks` into
+Runs only on explicit user confirm. Translates the validated response into
+`store.createProjectTree` calls (flattening the nested `subtasks` into
 `parentRef` siblings, and carrying `sections` and each task's `sectionRef`
 through unchanged, `src/pipeline/write.js`'s `toProjectTree`). Never writes
 without confirmation. A pure function, no model call.
+
+**`toProjectTree` returns `{ trees }`, not a single tree.** `trees` always
+has at least one entry (the project the response describes, or `{ id:
+inboxId }` for a loose-tasks response, unchanged from before); a second
+entry, `{ project: { id: inboxId }, sections: [], tasks }`, is appended only
+when at least one root task carries `standalone: true`. `flattenTasks` still
+runs exactly once over the whole response (preserving the `t{i}`/`t{i}s{j}`
+ref scheme `updateTaskAtRef` and the live preview both depend on), then
+partitions the flat result by `standalone` into the main tree's tasks and
+the loose tree's tasks; a standalone task's own `sectionRef` is forced
+`null` on its way into the second tree, since it is leaving the project's
+sections entirely. This is no longer one atomic batch when a second tree
+exists: `SuperRambleModal.jsx`'s Confirm handler awaits
+`store.createProjectTree` once per tree, main project first. The main
+tree's own failure still aborts outright (nothing else is attempted); the
+loose-tasks tree's failure, after the main tree already landed, surfaces as
+a real error placed alongside a real success (e.g. "Apartment Move created.
+Couldn't add 1 loose task to Inbox: ..."), never a generic failure message
+that hides the partial write. See `docs/architecture.md`'s "The store
+interface" section.
 
 **The model's raw due string is now really parsed here, not just carried
 through.** `toDue(raw)` runs it through `chrono-node`, anchored to the real
@@ -316,6 +355,11 @@ Write:
   `toProjectTree`'s output, its own sub-tasks absent with it; a renamed
   project and edited task content both carry through unchanged. See
   `scripts/eval-write.mjs` and "Live capture and the eval flywheel" below.
+- A standalone task (and its own subtasks) is absent from the main tree and
+  present in a second tree routed to the real Inbox by id, `sectionRef`
+  forced null. `scripts/eval-write.mjs` asserts this against `toProjectTree`
+  directly; `scripts/eval-offline.mjs`'s `standaloneContents` fixture field
+  asserts it end to end from a mocked model response.
 
 Guard suite:
 - Empty input, oversized input, and a dump that is plainly flat must not produce

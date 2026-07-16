@@ -1,7 +1,11 @@
-// Stage 3 (Write): translate a validated Structure response into the shape
+// Stage 3 (Write): translate a validated Structure response into the shape(s)
 // store.createProjectTree expects. Pure, no model call, no write of its own.
 // Nested subtasks flatten into parentRef siblings; sections and each task's
-// sectionRef carry through unchanged. See docs/llm-pipeline.md.
+// sectionRef carry through unchanged. toProjectTree returns { trees }, one
+// createProjectTree call per entry: a second entry, routing into the real
+// Inbox, appears only when the response carries a standalone root task, a
+// genuine outlier the model marked as not belonging in the rest of the
+// project. See docs/llm-pipeline.md.
 
 import { parse } from 'chrono-node';
 import { toISODate } from '../lib/date.js';
@@ -59,6 +63,11 @@ export function flattenTasks(structured) {
   const flat = [];
   (structured.tasks || []).forEach((t, i) => {
     const ref = `t${i}`;
+    // A root task only: standalone marks it as leaving the project entirely
+    // (docs/llm-pipeline.md, Stage 2), so its own subtasks inherit the same
+    // value below rather than reading a field the contract never puts on a
+    // subtask, a subtask always travels with its standalone parent.
+    const standalone = t.standalone === true;
     flat.push({
       ref,
       parentRef: null,
@@ -72,7 +81,8 @@ export function flattenTasks(structured) {
       // both flatten to the same empty value.
       description: t.description || '',
       priority: t.priority,
-      due: t.due
+      due: t.due,
+      standalone
     });
     (t.subtasks || []).forEach((s, j) => {
       flat.push({
@@ -82,7 +92,8 @@ export function flattenTasks(structured) {
         content: s.content,
         description: s.description || '',
         priority: s.priority,
-        due: s.due
+        due: s.due,
+        standalone
       });
     });
   });
@@ -123,7 +134,12 @@ export function updateTaskAtRef(tasks, ref, updater) {
 /**
  * @param {object} structured a response already validated by structureTranscript
  * @param {{ inboxId: string }} opts
- * @returns {{ project: object, sections: object[], tasks: object[] }} the store.createProjectTree call
+ * @returns {{ trees: { project: object, sections: object[], tasks: object[] }[] }}
+ *   one store.createProjectTree call per entry, always at least one. A second
+ *   entry, routing into the real Inbox, appears only when at least one root
+ *   task carried standalone: true (docs/llm-pipeline.md, Stage 2): a genuine
+ *   outlier the model marked as not belonging in the project the rest of the
+ *   response describes.
  */
 export function toProjectTree(structured, { inboxId }) {
   const project =
@@ -134,7 +150,17 @@ export function toProjectTree(structured, { inboxId }) {
       : { id: structured.targetProjectId || inboxId };
 
   const sections = (structured.sections || []).map((s) => ({ ref: s.ref, name: s.name }));
-  const tasks = flattenTasks(structured).map((t) => ({ ...t, due: toDue(t.due) }));
+  const flat = flattenTasks(structured).map((t) => ({ ...t, due: toDue(t.due) }));
+  const mainTasks = flat.filter((t) => !t.standalone);
+  // A standalone task is leaving the project's own sections entirely, so its
+  // sectionRef is forced null rather than trusted from the response (the
+  // contract's own coherence check already rejects the two together, but
+  // this stays correct even against an edited-but-unvalidated `structured`).
+  const looseTasks = flat.filter((t) => t.standalone).map((t) => ({ ...t, sectionRef: null }));
 
-  return { project, sections, tasks };
+  const trees = [{ project, sections, tasks: mainTasks }];
+  if (looseTasks.length) {
+    trees.push({ project: { id: inboxId }, sections: [], tasks: looseTasks });
+  }
+  return { trees };
 }

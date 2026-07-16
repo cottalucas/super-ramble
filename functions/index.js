@@ -143,6 +143,7 @@ const STRUCTURE_SYSTEM_PROMPT_RULES = [
   'Capture only what the transcript says. Never invent a task that is not in the transcript.',
   'If what they said clearly belongs to an existing project, route to it by id instead of creating one.',
   'Do not collapse unrelated items into one mega-project.',
+  'When decision is "project" but one item is a genuine outlier, unrelated to the project\'s own effort, set standalone true on that task instead of forcing it in. It goes to the user\'s Inbox separately, not filed under the project. This is a separate question from decision and confidence, which judge the whole transcript: do not use standalone to hedge on whether the transcript itself is project-shaped, and do not reach for it just because an item has no natural section, "No section" already exists for that.',
   'Report your confidence in the decision as a number from 0 to 1. When you are not confident it is a coherent project, lean toward "tasks" instead of inventing a "project" structure that might not fit.',
   'needsClarification is for routing uncertainty only, never for uncertainty about whether something is project-shaped, those are two different questions. "Is this a coherent project or loose tasks" is answered by confidence and the "tasks" fallback above, never by a question to the user. "Does this belong to something that already exists" is the one worth asking about, and only when genuinely unclear: could this new content extend one of existingProjects, or is it clearly its own new thing, or (when two existingProjects share a name) which one it means. When content is clearly new and unrelated to every existingProjects entry, propose the new project confidently, no question first: the user still reviews and confirms before anything is written.',
   'Write reasoning the way a person would describe what they heard: plain language about their actual plans or errands. Never refer to "the dump" or "the transcript" as if reasoning were describing an input variable; describe the content itself. Keep it under 20 words, one plain sentence.',
@@ -267,6 +268,7 @@ const STRUCTURE_JSON_SCHEMA = {
           priority: { type: 'integer' },
           due: { type: ['string', 'null'] },
           sectionRef: { type: ['string', 'null'] },
+          standalone: { type: 'boolean' },
           subtasks: { type: 'array', items: SUBTASK_SCHEMA }
         },
         required: ['content', 'priority', 'due'],

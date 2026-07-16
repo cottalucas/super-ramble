@@ -3,6 +3,153 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-17 (third round): A `standalone` task flag, closing the "one stray errand has nowhere to go but inside the new project" gap
+
+Read `docs/orchestration.md`, the full `docs/` set, and both same-day entries
+below before touching anything. The gap: when `decision` is `"project"`,
+`src/pipeline/write.js`'s `toProjectTree` used to build one `project` object
+and apply it to the whole `tasks` array with no per-task exception, so a
+genuine, unrelated errand caught in an otherwise coherent transcript (the
+repro: an apartment-move brain-dump with "somewhere in there I really should
+just also pick up milk and eggs, keep forgetting") had nowhere to go but the
+new project's own "No section" column. This is the real contract extension
+named as the priority-one fix over the cheaper prompt-wording alternative,
+per `docs/architecture.md`'s "the data model is the contract that matters
+most."
+
+**1. Contract: `standalone` on a root task only.** Added to both schema
+copies and both hand-synced contract-validator copies, kept identical by the
+usual discipline (`scripts/check-prompt-sync.mjs`):
+`functions/index.js`'s `STRUCTURE_JSON_SCHEMA` task item gained
+`standalone: { type: 'boolean' }`, optional, not in that item's `required`
+list, `SUBTASK_SCHEMA` untouched. `src/pipeline/contracts.js` and
+`functions/contracts.js` both gained `'standalone'` on `TASK_KEYS` (never
+`SUBTASK_KEYS`), a type check in `validateTask`, and two coherence rules: a
+`standalone: true` task must not also carry a `sectionRef` (it is leaving
+the project's own sections entirely, not filed under one of them), and
+`decision === 'tasks'` must never carry a standalone task (a loose-tasks
+response is already outside any project, so there is nothing left for
+`standalone` to mark it apart from). Two new negative cases in
+`evals/offline/contract-cases.mjs`: `neg-standalone-with-section` and
+`neg-standalone-in-loose-tasks`.
+
+**2. Prompt: one new rule, identical in both copies.** Added right after
+"Do not collapse unrelated items into one mega-project" in both
+`src/pipeline/prompt.js`'s `SYSTEM_PROMPT` and `functions/index.js`'s
+`STRUCTURE_SYSTEM_PROMPT_RULES`, verified byte-identical via
+`npm run check:prompt-sync`. States `standalone` is a separate axis from
+`decision`/`confidence` (those judge the whole transcript; `standalone`
+never hedges on whether the transcript itself is project-shaped) and is not
+a substitute for "No section" on a task that simply has no natural section.
+
+**3. Write: `toProjectTree` returns `{ trees }`, not one tree.**
+`flattenTasks` now carries `standalone` through on every flat row
+(`t.standalone === true` on a root task's own push, the same value
+inherited from its parent on that root's subtask pushes, since a subtask
+never carries its own `standalone` field in the contract). `toProjectTree`
+calls `flattenTasks` once, exactly as before (preserving the `t{i}`/`t{i}s{j}`
+ref scheme `updateTaskAtRef` and the live preview both depend on), then
+partitions the flat result into `mainTasks` and `looseTasks` (`sectionRef`
+forced `null` on the way into the loose set, since it is leaving the
+project's sections entirely regardless of what it was carrying). `trees` is
+always `[{ project, sections, tasks: mainTasks }]`, plus a second
+`{ project: { id: inboxId }, sections: [], tasks: looseTasks }` appended
+only when `looseTasks.length`. `SuperRambleModal.jsx`'s Confirm handler
+awaits `store.createProjectTree` once per tree, main project first: **no
+longer one atomic batch across both when a loose task exists.** The main
+tree's own failure still aborts outright exactly as before; the loose tree's
+own failure, after the main tree already landed, is reported plainly
+alongside the real success ("Apartment Move created. Couldn't add 1 loose
+task to Inbox: ...") rather than a generic failure hiding a partial write,
+the same pattern this modal's Todoist-push failure already used. All 16
+existing `scripts/eval-write.mjs` cases updated mechanically to read
+`toProjectTree(...).trees[0]` (none of them involve a standalone task, so
+`trees` stays length 1 for all of them); one new case added asserting a
+standalone root task (with its own subtask) alongside normal project tasks
+produces exactly two trees, the main tree excluding the standalone task and
+its subtask entirely, the second tree's project `{ id: inboxId }`, its
+task's `sectionRef` forced `null`.
+
+**4. Offline eval runner: asserts standalone routing too, not just contract
+validity.** `scripts/eval-offline.mjs`'s `fieldsByContent` now also captures
+`standalone` per content (a subtask inherits its parent's value, matching
+`flattenTasks`). A new `standaloneContents` fixture field, symmetric
+extra/missing style matching the existing `contents` check: every content
+listed must be `standalone: true` in the real output, nothing outside that
+list should be. Verified the assertion actually catches the regression it
+exists to catch, not just written and trusted: temporarily dropped
+`standalone: true` from the new fixture's `mockResponse`, reran
+`npm run eval:offline`, got a clean failure ("standalone routing matches:
+missing: Pick up milk and eggs"), restored it, reran clean.
+
+`evals/fixtures/12-project-with-a-stray-loose-task.json` (new): a coherent
+apartment-move transcript (landlord notice, packing, moving-truck quotes,
+internet-cancellation timing, address updates, and the milk-and-eggs stray
+errand), `decision: "project"`, name "Apartment Move," sections for Packing
+and Moving Logistics, "Pick up milk and eggs" as a root task with
+`standalone: true`, no `sectionRef`. `expected.standaloneContents:
+["Pick up milk and eggs"]`; `expected.contents` still includes it, same as
+every other fixture's `contents` list covering everything the model is
+allowed to produce regardless of where it is written.
+
+**5. Preview UI: the split is stated before Confirm, not honored silently.**
+`SuperRambleModal.jsx`'s three-way header gains a small `.sr-standalone-note`
+line ("N tasks stay loose, added to Inbox") below whichever of the three
+header states is showing, whenever `decision === 'project'` and at least one
+task in `edited.tasks` (not `structured.tasks`, so removing a standalone
+task in the preview updates the count) carries `standalone: true`.
+`TreePreview` partitions root tasks into `projectRoots` (rendered exactly as
+before, grouped by section or "No section") and `standaloneRoots`, the
+latter rendered in their own group after the rest with a `.section-head`
+heading, "Loose, going to Inbox," so a standalone task is never
+indistinguishable from a real project task that simply has none. That
+group's rows get the real Inbox project (`inboxProject`, resolved once via
+`projects.find((p) => p.id === inboxId)`, a new prop threaded alongside
+`previewProject`) as their own `project`/`showProject`, regardless of what
+`previewProject` resolves to elsewhere on the same response. Its edit card's
+`SectionRefPicker` is deliberately not shown: an empty `sections` array is
+passed for this group only, so `TaskRow`'s footer falls back to the plain
+project label instead of a picker whose choice would never actually land
+(`toProjectTree` forces the loose set's `sectionRef` to `null` regardless),
+which would otherwise be a dead control.
+
+**Verified live**, `VITE_ENABLE_LOCAL_PREVIEW=true` locally (reverted to
+`false` after), a temporary debug branch in `submit()` (removed before this
+entry, never committed) returning a mocked apartment-move-plus-milk-and-eggs
+response: the header showed "1 task stays loose, added to Inbox" under
+"Suggested project name"; the tree rendered "Packing," "Moving Logistics,"
+and a "Loose, going to Inbox" group with "Pick up milk and eggs," labeled
+"Inbox"; expanding that row's edit card showed the plain "Inbox" footer
+label, no section picker; Confirm created "Apartment Move" with exactly its
+3 real tasks (Inbox's own sidebar count went to 1, and opening Inbox showed
+"Pick up milk and eggs" alone, opening Apartment Move showed none of it).
+Build clean, full `npm run eval` (offline, date, date-parse, todoist, write,
+prompt-sync) green, `node scripts/check-secrets.mjs` clean.
+
+`docs/llm-pipeline.md`'s Stage 2 JSON shape and bullet list, Stage 3's Write
+contract, and its "Eval assertions per stage" section; `docs/architecture.md`'s
+"The store interface" section describing `createProjectTree`/`toProjectTree`;
+and `docs/design-system.md`'s "Super Ramble preview" section (the new
+standalone-note line and "Loose, going to Inbox" group, plus a correction to
+an older, now half-true "the whole response writes into one project" line)
+were all updated in this same pass.
+
+### Decisions not to relitigate
+
+- `standalone` lives only on a root task, never a subtask; a subtask always
+  travels with its parent, wherever that task ends up. Do not add a
+  per-subtask `standalone` field.
+- `toProjectTree` writing up to two trees, and Confirm awaiting them
+  sequentially rather than in one atomic batch, is intentional: the main
+  project and the Inbox loose-tasks tree are genuinely independent writes
+  into different projects, and the second's own failure should not undo the
+  first's already-landed success. Do not collapse this back into one
+  `createProjectTree` call without a new, equally explicit decision.
+- A manual per-task toggle between "in the project" and "loose in Inbox"
+  from the edit card is a real, natural follow-on, not built this pass and
+  not required: the model deciding `standalone` and the UI honoring it
+  correctly is the actual fix here.
+
 ## 2026-07-17 (second round): Six scoped fixes to the Super Ramble preview and one global checkbox-hover fix, from a fresh round of feedback against the same-day pass below
 
 Read `docs/orchestration.md`, the full `docs/` set, and the entry directly
