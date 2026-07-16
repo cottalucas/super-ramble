@@ -3,6 +3,57 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-16: Sidebar header caret added, the separate gear icon removed
+
+Two changes to `Sidebar.jsx`'s header, reported directly against a real
+Todoist screenshot: the name row carries a small down-caret beside the name,
+and there is no separate gear icon next to it at all.
+
+- `sidebar-head-trigger` gains `IconCaret` (already imported, already used
+  for the "My Projects" collapse caret and a project's own caret) right
+  after the name span: `.sidebar-head-caret`, `width={14} height={14}`,
+  static, no rotate transform, tinted `--ds-ink-soft`. A visual affordance
+  marking that the row opens a menu, not a control of its own; `onClick`
+  stays on the outer button, unchanged. A new class rather than reusing
+  `.nav-section-caret`, since that class's rotate-on-collapse behavior does
+  not apply here.
+- The separate gear icon button (`title="Settings"`, right of the trigger)
+  is deleted outright, along with the now-unused `IconSettings` import in
+  `Sidebar.jsx` (grep confirmed no other reference in `src/`; `IconSettings`
+  itself is untouched in `Icons.jsx`, left for possible future reuse).
+
+**This is an explicit reversal of the 2026-07-05/2026-07-10 "additive, not
+replacement" decision** (`docs/design-system.md`'s "Sidebar avatar menu"
+section originally said the gear "stays exactly where it is" when the
+avatar-menu Settings row was added). Requested directly this pass, not a
+rediscovered bug. `docs/design-system.md` updated in the same pass: the
+"stays exactly where it is" sentence is gone, replaced with a plain
+statement that the avatar-menu Settings row is the only Settings entry
+point now, the same pattern that section already documents for Log out
+since 2026-07-15.
+
+Verified live in both themes (`VITE_ENABLE_LOCAL_PREVIEW` toggled to `true`
+temporarily for the local dev server only, since no real Firebase Auth
+session or Claude in Chrome connection was available this pass; reverted to
+`false` before the final build, and `npm run verify:prod-env` confirmed
+clean after reverting): the header row lays out cleanly with one fewer
+icon-btn (the sidebar-toggle button stays), the caret reads
+`--ds-ink-soft` (`rgb(154, 154, 154)` in dark) at 14x14 as specified, the
+avatar-menu Settings row still opens `SettingsModal`, and `grep` found no
+other code path referencing the removed button.
+
+`npm run build` clean. `npm run eval` green: 18/18 offline Structure, 12/12
+date, 26/26 Todoist, 11/11 write, `check:prompt-sync` passed (none of these
+suites touch anything this pass changed; run anyway per the loop's
+definition of done). `node scripts/check-secrets.mjs` passed.
+
+### Decisions not to relitigate
+
+- Settings has exactly one entry point now, the avatar-menu row. Do not
+  re-add a second Settings control (a gear icon or otherwise) outside that
+  menu, the same pattern already established for sign-out
+  (`docs/design-system.md`'s "Sidebar avatar menu" section, 2026-07-15).
+
 ## 2026-07-15: UI polish pass, eight items: card truncation, description cap, autosave indicator, drag-and-drop indicator, redundant Sign Out removed, Settings chrome, page title, sidebar-collapsed spacing
 
 Eight scoped items, one branch, all `src/` only; no `src/pipeline/` or

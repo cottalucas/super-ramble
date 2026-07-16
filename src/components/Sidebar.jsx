@@ -14,7 +14,6 @@ import {
   IconPlus,
   IconDots,
   IconCaret,
-  IconSettings,
   IconSidebarToggle,
   IconSparkle
 } from './Icons.jsx';
@@ -404,6 +403,7 @@ export default function Sidebar({ view, onNavigate, onToggleSidebar, mobile = fa
           <button type="button" className="sidebar-head-trigger" onClick={() => setAvatarMenuOpen((v) => !v)}>
             <span className="avatar">{(user.displayName || 'You').slice(0, 1).toUpperCase()}</span>
             <span style={{ flex: 1 }}>{user.displayName || 'You'}</span>
+            <IconCaret width={14} height={14} className="sidebar-head-caret" />
           </button>
           {avatarMenuOpen ? (
             <Popover onClose={() => setAvatarMenuOpen(false)}>
@@ -437,9 +437,6 @@ export default function Sidebar({ view, onNavigate, onToggleSidebar, mobile = fa
             </Popover>
           ) : null}
         </span>
-        <button type="button" className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
-          <IconSettings width={16} height={16} />
-        </button>
         <button type="button" className="sidebar-toggle" title="Hide sidebar" onClick={onToggleSidebar}>
           <IconSidebarToggle width={16} height={16} />
         </button>
