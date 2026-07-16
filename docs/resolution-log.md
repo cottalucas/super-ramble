@@ -3,6 +3,187 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-16: Five scoped pieces closing gaps found against Todoist's own "Text Scan" AI feature: a real date parser, a fully editable preview, a task-count/transcript summary, and a thumbs up/down signal
+
+One branch, five parts, discussed directly with Lucas (the PO), each aimed
+at a real gap found comparing Super Ramble's output against a real
+screenshot of Todoist's own "Text Scan" AI feature on the identical input.
+Read `docs/orchestration.md` and the full `docs/` set fresh first, as
+instructed; no real conflict was found against any current doc or code, so
+nothing needed to be raised before building. Built and verified in order,
+one combined entry here rather than five, itemized below so a future agent
+can tell which decision belongs to which part.
+
+**Part 1: a real natural-language date parser (Write stage).**
+`toDue(raw)` (`src/pipeline/write.js`) no longer returns `date: null,
+datetime: null` unconditionally; it parses `raw` with `chrono-node` (a new
+real dependency, `npm install chrono-node`, the one new-dependency
+exception this app's own "generally avoids new dependencies" posture
+allows, the same reasoning `docs/architecture.md` already gives: hand-
+rolling relative-date parsing correctly is exactly the class of bug this
+repo already shipped once, the UTC-vs-local-day mismatch
+`scripts/eval-date.mjs` guards against elsewhere), anchored to the real
+`new Date()`, local time. `forwardDate: true` is required, not optional,
+verified directly: without it, chrono resolves a bare weekday that already
+passed this week into the past instead of forward. `date` is set whenever
+chrono resolves a calendar day; `datetime` only when chrono found a real
+stated time with its own certainty (`isCertain('hour')`), never a midnight
+or noon default chrono guesses in for a phrase with no stated time.
+`isRecurring` is a separate signal chrono itself does not expose ("every
+Monday" resolves to one concrete date with no recurring flag; "daily"/
+"weekly" alone resolve to no date at all), checked independently against
+the raw text via a small regex, so a pure-recurring phrase with no
+resolvable single date still sets `isRecurring: true`. `string` always
+carries the raw input through verbatim, so `functions/todoist.js`'s only
+consumer of this field (`t.due.string`, unaffected by any of this, Todoist
+parses its own natural-language string server-side) keeps working
+unchanged. Anything chrono cannot parse at all ("asap," "sometime," an
+empty string) fails closed to the exact prior shape, never a throw, never a
+guess. `scripts/eval-date-parse.mjs` (new, 19/19), wired into `npm run
+eval`, covers all of this deterministically, anchored to whatever "now"
+actually is when it runs rather than a hardcoded date, verified by hand
+against real chrono output first (`tomorrow`/`today`/`next Friday`/a bare
+weekday/`tomorrow at 3pm`/`every Monday`/`daily`/`by the 20th` all probed
+directly in a scratch script before writing the eval's own expectations).
+
+**Part 2: the editable preview extended to priority, due date, and section
+membership.** `TaskRow.jsx`'s editable mode gains a `.task-edit-controls`
+row (always visible, not hover-revealed like `.task-row-actions`, since
+these are primary editing controls, not a secondary row action): a
+priority trigger reusing `PriorityPicker.jsx` directly; a due-date trigger
+reusing `DatePicker.jsx`, but reading only its `date` back out as a plain
+ISO string, never the store's full due shape, so the edited value flows
+straight through Part 1's `toDue()` unchanged at Confirm-time, no second
+due-shape needed; a section-membership trigger, a small new local picker
+(`SectionRefPicker`, `TaskRow.jsx`, the only caller) over the response's
+own local `sections` plus "No section," root tasks only (depth 0), since a
+sub-task has no `sectionRef` of its own in this contract. All three reuse
+`updateTaskAtRef` (`src/pipeline/write.js`), already generic enough for
+any field-level update, not a second update mechanism.
+`SuperRambleModal.jsx`'s `editLog` gained `priorityEdits`/`dueEdits`/
+`sectionEdits`, the same `{ ref, from, to }` capture-at-the-moment-of-edit
+discipline `contentEdits` already used, filtered the same way at Confirm
+(a value clicked back to its starting point is not reported).
+`functions/index.js`'s `isValidEdits` shape-checks all three new arrays
+before they reach Firestore, the same discipline the existing three
+already got. `gradeStructureTrace`'s auto-promotion path does **not**
+attempt to replay any of the three new edit kinds onto the reconstructed
+tree: `reconstructCorrectedTree` only ever replays `contentEdits`,
+`removedTasks`, and `projectNameChange`; when a `confirmed_with_edits`
+trace's `edits` carries any of the three new arrays, auto-promotion is
+skipped outright and logged to `pipelineLearningLog` instead, before
+`reconstructCorrectedTree` is ever called, the same fail-closed posture
+already documented for the "edited, then removed" content-edit case.
+Promoting a tree that silently drops a real edit the user made would teach
+the live model the model's own uncorrected value, worse than not promoting
+at all. Replaying these three is real, separate future work, not this
+pass. `scripts/eval-write.mjs` gained four new cases (16/16) for the
+client-side plumbing (`updateTaskAtRef` + `toProjectTree` for priority,
+due, clearing a due, and section membership); one bug caught and fixed
+while writing them: the first draft asserted against a fixed array index,
+which broke because `flattenTasks` interleaves a task's own sub-tasks
+immediately after it, so a flat index does not line up with the original
+task order once sub-tasks are in the mix. Fixed by looking up by `content`
+instead (`taskByContent`, new helper in the eval script), the same lookup
+`contents()` already implied was needed for anything beyond presence
+checks.
+
+**Part 3: a task-count summary and a pinned raw-input snippet.** Both at
+the top of the real preview (not the `needsClarification` branch's task
+count, since there is no tree yet to count there; the transcript snippet
+does show in both branches, arguably more useful in
+`needsClarification`'s case, where the user is being asked a question
+about what they said). The count reuses `flattenTasks(edited).length`, the
+exact same call `TreePreview` already builds its rows from, so there is no
+second counting path to drift out of sync. The snippet
+(`.sr-transcript-snippet`) is a small muted box, `--ds-ink-soft`, a light
+background tint, collapsed to one line and truncated with an ellipsis
+(`truncateSnippet`, new helper), the full text behind a native `title`
+tooltip; captured once at submit time into its own `submittedTranscript`
+state, not read live from the textarea's own `text` state, since the
+preview must always show exactly what was sent, decoupled from `text`'s
+own lifecycle (the textarea itself is not even rendered once state moves
+past `'input'`).
+
+**Part 4: a thumbs up/down feedback signal, independent of confirm/
+cancel.** `POST /api/structure/feedback` (`functions/index.js`, new): body
+`{ traceId, feedback: "up" | "down" }`, merge-writes `feedback` onto the
+trace, no `checkAndReserveLimit`/`logUsage` call, the same reason
+`/todoist/status` and friends skip it too (spends no model call). A
+toggle, not an append-only log: a later call overwrites the earlier value,
+both server-side and in the client's own `feedback` state. No
+`firestore.rules` change needed, confirmed rather than assumed:
+`structureTraces` already denies every client write outright (`allow
+write: if false`), so this new field needs no new rule, only the Function
+writes it. Two new icon buttons (`IconThumbsUp`/`IconThumbsDown`,
+`Icons.jsx`, new) sit on the same line as the confidence percentage
+(`.sr-confidence-row`), tint `--ds-red` when selected
+(`.sr-feedback-selected`, the same light `color-mix` active-state
+convention `.voice-mic.recording` already uses), no confirmation dialog.
+Unlike `recordOutcome`'s fully silent failure swallow, a failed feedback
+save does surface, through this app's existing quiet toast (`flash`): a
+real signal worth knowing didn't land, not pure background telemetry.
+Deliberately narrow this pass: `feedback` is captured and persisted only,
+never read by `gradeStructureTrace` or auto-promotion, each its own
+separate future decision.
+
+**Verification.** All four offline eval suites green (19/19 date-parse,
+16/16 write, unchanged 18/18 offline Structure, 12/12 date, 26/26 Todoist,
+`check:prompt-sync` passed), `npm run build` clean, `node
+scripts/check-secrets.mjs` passed, `node --check functions/index.js`
+passed. Live verification could not use a real `/api/structure` call (no
+Claude in Chrome connection or real Firebase Auth session available this
+pass, the same constraint the 2026-07-16 sidebar-caret entry above hit);
+rather than skip verification, `submit()` was temporarily edited with one
+`transcript === '__DEV_MOCK__'` branch returning a realistic, hand-built
+Structure response (a project, one section, four tasks including a
+sub-task, a spread of due phrasings covering `tomorrow at 3pm`/`by next
+Friday`/`this weekend`/`every Monday`), `VITE_ENABLE_LOCAL_PREVIEW`
+toggled to `true` for the dev server only, and the whole flow driven live
+in the browser: confirmed the transcript snippet and task count render
+correctly, confirmed every due phrasing parsed to the correct real date
+(the calendar and time-of-day both round-tripped correctly through
+`DatePicker`'s own `value` prop, itself just Part 1's real `toDue()`
+output), clicked a priority chip and watched both the chip and the row's
+checkbox ring color update live, clicked a section chip and watched the
+target section's own task count update from 2 to 3, clicked a date preset
+and watched the due meta line and calendar highlight both update to match,
+and clicked both thumbs buttons and watched the selected one tint red
+while the other reverted, confirmed via network logs the real `POST
+/api/structure/feedback` call fired with the right path and payload (a 404
+locally, no Function running, the expected shape of failure this
+environment produces, not a bug: it correctly triggered the quiet-toast
+failure path rather than silently swallowing it). Checked both themes. The
+temporary stub was then reverted completely (`grep` confirmed no trace of
+it left) and `VITE_ENABLE_LOCAL_PREVIEW` set back to `false`,
+`npm run verify:prod-env` confirmed clean, and the production build's own
+output hash was confirmed identical to the pre-stub build, before this
+entry was written.
+
+### Decisions not to relitigate
+
+- `chrono-node` is a real, intentional exception to this app's own
+  "generally avoids new dependencies" posture, for the reason stated in
+  Part 1 above: do not replace it with a hand-rolled parser on the
+  assumption it was an unreviewed addition.
+- A due edit in the preview is always a plain ISO date string (or `null`),
+  never the store's full `{ date, datetime, string, isRecurring }` shape;
+  do not add a second due-shape to the preview's own edit path without a
+  new, equally explicit decision.
+- `priorityEdits`/`dueEdits`/`sectionEdits` are captured and shape-checked
+  but never replayed by `gradeStructureTrace`'s auto-promotion path; a
+  `confirmed_with_edits` trace carrying any of them always skips
+  auto-promotion outright. Do not wire replay support in without first
+  extending `reconstructCorrectedTree` itself to handle all three, a
+  separate, scoped pass.
+- `feedback` (Part 4) is captured and persisted only; it is not part of
+  grading or auto-promotion. Wiring it in is separate, future work, not an
+  oversight here.
+- The `__DEV_MOCK__` verification stub was temporary, reverted in full
+  before this entry was written; do not look for it in `SuperRambleModal.jsx`
+  and do not reintroduce a permanent mock-response escape hatch on the
+  assumption this pass left one on purpose.
+
 ## 2026-07-16: Sidebar header caret added, the separate gear icon removed
 
 Two changes to `Sidebar.jsx`'s header, reported directly against a real

@@ -30,6 +30,14 @@ function contents(tree) {
   return tree.tasks.map((t) => t.content);
 }
 
+// flattenTasks interleaves a task's own subtasks immediately after it, so a
+// flat array index does not line up with baseStructured()'s own task order
+// once subtasks are in the mix; look up by content instead of assuming a
+// position.
+function taskByContent(tree, content) {
+  return tree.tasks.find((t) => t.content === content);
+}
+
 // A representative "structured" response, shaped exactly like a real
 // validated Structure output: one section, one task with two sub-tasks, one
 // section-less task. Rebuilt fresh per case below (never shared/mutated
@@ -154,6 +162,40 @@ const inboxId = 'inbox-1';
   check('routed-project-uses-id-not-name', 'routing into an existing project writes by id, never a name', tree.project, {
     id: 'proj-existing'
   });
+}
+
+// --- Editing a root task's priority carries through toProjectTree ---
+{
+  const s = baseStructured();
+  s.tasks = updateTaskAtRef(s.tasks, 't0', (t) => ({ ...t, priority: 1 }));
+  const tree = toProjectTree(s, { inboxId });
+  check('edit-priority', "editing a task's priority replaces it, other fields untouched", taskByContent(tree, 'Task A').priority, 1);
+}
+
+// --- Editing a task's due carries through toDue() unchanged at Confirm-time ---
+{
+  const s = baseStructured();
+  s.tasks = updateTaskAtRef(s.tasks, 't0', (t) => ({ ...t, due: '2026-07-20' }));
+  const tree = toProjectTree(s, { inboxId });
+  const due = taskByContent(tree, 'Task A').due;
+  check('edit-due-date', 'an edited raw due string flows straight through toDue() at Confirm-time', due.date, '2026-07-20');
+  check('edit-due-string-verbatim', "toDue()'s own string field carries the edited raw value verbatim", due.string, '2026-07-20');
+}
+
+// --- Clearing a task's due writes null through, same as the model never stating one ---
+{
+  const s = baseStructured();
+  s.tasks = updateTaskAtRef(s.tasks, 't1', (t) => ({ ...t, due: null })); // Task B started with due: 'today'
+  const tree = toProjectTree(s, { inboxId });
+  check('clear-due', "clearing a task's due writes a null due through, same as no due at all", taskByContent(tree, 'Task B').due, null);
+}
+
+// --- Editing a root task's sectionRef carries through ---
+{
+  const s = baseStructured();
+  s.tasks = updateTaskAtRef(s.tasks, 't1', (t) => ({ ...t, sectionRef: 'sec1' })); // Task B started with no section
+  const tree = toProjectTree(s, { inboxId });
+  check('edit-section', "editing a task's sectionRef moves it into that section", taskByContent(tree, 'Task B').sectionRef, 'sec1');
 }
 
 // --- Full editable-preview path: a removal, a content edit, and a rename together ---

@@ -248,6 +248,52 @@ re-deriving its own; matches docs/roadmap.md's Out of scope line
 simple on purpose, a layout and prominence fix, not a first pass toward
 something more elaborate. See docs/resolution-log.md, 2026-07-08.
 
+## Super Ramble preview
+
+`SuperRambleModal.jsx`'s preview state (a validated Structure response, not
+yet written), closing a set of gaps found comparing this app's own output
+against a real screenshot of Todoist's own "Text Scan" AI feature on the
+identical input:
+
+- **Fully editable, not just per-task removal, an inline project-name edit,
+  and per-task content edits.** Priority, due date, and section membership
+  are editable too, each a small chip trigger on `TaskRow`'s editable rows
+  (`.task-edit-controls`, always visible, not hover-revealed like
+  `.task-row-actions`: these are primary editing controls this whole
+  preview exists for, "click any task to edit," not a secondary row
+  action). Priority reuses `PriorityPicker.jsx` directly; due date reuses
+  `DatePicker.jsx`, reading only its `date` back out as a plain ISO string,
+  never the store's full due shape; section membership is a small new
+  local picker (`SectionRefPicker`, `TaskRow.jsx`) over the response's own
+  local `sections` plus "No section," matching the exact `.chip`+`Popover`
+  shape every other picker in this app already uses, root tasks only
+  (depth 0), since a sub-task has no `sectionRef` of its own in this
+  contract.
+- **A pinned transcript snippet and a task-count line**, both at the top of
+  the preview, above the reasoning/confidence line: `.sr-transcript-snippet`
+  is a small muted box (`--ds-ink-soft`, a light background tint, not a
+  border), one line, collapsed and truncated with an ellipsis (the full
+  text sits behind a native `title` tooltip), so the user does not lose the
+  thread of what they said while reviewing the proposal below it. The task
+  count ("N tasks generated," `.sr-task-count`) counts root tasks plus
+  every nested sub-task, the exact same `flattenTasks` call `TreePreview`
+  already builds its rows from, so there is no separate counting logic to
+  drift out of sync. Neither competes with `.sr-reasoning` as a second
+  primary element ("One primary action per surface" above extends to not
+  over-emphasizing secondary content too); the snippet is deliberately
+  quieter than the reasoning text, not equally loud.
+- **A thumbs up/down feedback signal**, on the same line as the confidence
+  percentage (`.sr-confidence-row`, `.sr-feedback`), independent of and
+  before any Confirm/Discard decision: a lighter-weight, second signal than
+  the outcome telemetry this modal already records. Tints `--ds-red` when
+  selected (`.sr-feedback-selected`, a light `color-mix` background, the
+  same active-state convention `.voice-mic.recording` and every other
+  active surface in this app already use, never a solid fill). No
+  confirmation dialog; a failed save surfaces through this app's existing
+  quiet toast (`flash`), not a blocking error state, since this is a real
+  signal worth knowing didn't land, not pure background telemetry the way
+  the outcome POST's own silent-swallow is.
+
 ## Responsive
 
 A defensive pass, not a second layout: below 640px (a phone, not a small

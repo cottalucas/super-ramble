@@ -8,9 +8,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --host localhost",
-    "eval": "npm run eval:offline && npm run eval:date && npm run eval:todoist && npm run eval:write && npm run check:prompt-sync",
+    "eval": "npm run eval:offline && npm run eval:date && npm run eval:date-parse && npm run eval:todoist && npm run eval:write && npm run check:prompt-sync",
     "eval:offline": "node scripts/eval-offline.mjs",
     "eval:date": "node scripts/eval-date.mjs",
+    "eval:date-parse": "node scripts/eval-date-parse.mjs",
     "eval:todoist": "node scripts/eval-todoist.mjs",
     "eval:write": "node scripts/eval-write.mjs",
     "check:prompt-sync": "node scripts/check-prompt-sync.mjs",
@@ -28,6 +29,7 @@
     "verify:prod-env": "node scripts/verify-prod-env.mjs"
   },
   "dependencies": {
+    "chrono-node": "^2.10.0",
     "firebase": "^10.12.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

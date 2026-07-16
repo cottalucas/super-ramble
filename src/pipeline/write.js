@@ -3,13 +3,52 @@
 // Nested subtasks flatten into parentRef siblings; sections and each task's
 // sectionRef carry through unchanged. See docs/llm-pipeline.md.
 
-// The model's due is a natural-language or ISO string, not yet normalized to
-// the store's { date, datetime, string, isRecurring } shape (no date parser
-// exists yet, see docs/llm-pipeline.md). Carried as the human-readable
-// fallback so nothing crashes and the text is not silently dropped; it will
-// not bucket into Today/Upcoming until a real parser lands.
+import { parse } from 'chrono-node';
+import { toISODate } from '../lib/date.js';
+
+// "every Monday," "daily," "weekly": a recurring signal chrono-node itself
+// does not expose (it resolves "every Monday" to one concrete next-Monday
+// date, no recurring flag; "daily"/"weekly" alone resolve to no date at
+// all). Checked independently of whatever chrono does or does not resolve,
+// so a pure-recurring phrase with no resolvable single date ("daily") still
+// sets isRecurring true even though date/datetime stay null.
+const RECURRING_RE = /\b(every|each)\b|\b(daily|weekly|monthly|yearly|annually|nightly)\b/i;
+
+// The model's due is a natural-language or ISO string. Parsed with
+// chrono-node, anchored to the real current moment (local time, matching
+// this file's local-day convention, never UTC): a proven, purpose-built
+// parser, not a second hand-rolled date system risking the exact class of
+// UTC-vs-local-day bug scripts/eval-date.mjs already guards against
+// elsewhere in this app. `forwardDate: true` is required, not optional: a
+// bare weekday or "next Friday" must resolve into the future, verified
+// directly (without it, chrono resolves a bare weekday that already passed
+// this week into the past instead). `string` always carries the raw input
+// verbatim, unchanged, so functions/todoist.js's existing `t.due.string`
+// read (its only consumer) keeps working exactly as before. `datetime` is
+// only ever set when chrono found a real time component with its own
+// certainty (`isCertain('hour')`); chrono defaults a missing hour to
+// midnight or noon depending on the phrase matched, and neither default is
+// a real time the user stated. Fails closed on anything chrono cannot parse
+// at all ("asap," "sometime," ""): the exact prior shape, date and datetime
+// both null, never a throw, never a guessed value. See
+// scripts/eval-date-parse.mjs and docs/llm-pipeline.md.
 export function toDue(raw) {
-  return raw == null ? null : { date: null, datetime: null, string: raw, isRecurring: false };
+  if (raw == null) return null;
+  const isRecurring = RECURRING_RE.test(raw);
+  let date = null;
+  let datetime = null;
+  try {
+    const results = parse(raw, new Date(), { forwardDate: true });
+    if (results.length) {
+      const start = results[0].start;
+      const resolved = start.date();
+      date = toISODate(resolved);
+      if (start.isCertain('hour')) datetime = resolved.toISOString();
+    }
+  } catch {
+    // Fail closed: date/datetime stay null, string/isRecurring still carry through.
+  }
+  return { date, datetime, string: raw, isRecurring };
 }
 
 // One flat list, each root task immediately followed by its own subtasks,

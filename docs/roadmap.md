@@ -829,6 +829,31 @@ data this pass's UI copy and trigger `timeoutSeconds` are both based on. See
 the resolution log entry for this pass for live verification against the
 deployed site.
 
+Phase 3, part 12: five scoped pieces closing gaps found comparing this
+app's own output against a real screenshot of Todoist's own "Text Scan" AI
+feature on the identical input. See the resolution log's dated, itemized
+entry for this pass for the full detail behind each.
+
+- A real natural-language date parser (`chrono-node`, a new dependency) in
+  `toDue()` (`src/pipeline/write.js`), replacing the human-readable-only
+  fallback part 1 shipped: a Structure-created task now buckets into Today
+  and Upcoming, matching Todoist's own bucketable date chip on the
+  identical input. `scripts/eval-date-parse.mjs` (new) covers it.
+- The editable preview extended to priority, due date, and section
+  membership, alongside the removal/rename/content edits it already had;
+  see `docs/design-system.md`'s "Super Ramble preview" section and
+  `docs/llm-pipeline.md`'s "Live capture and the eval flywheel". The three
+  new edit kinds are not yet replayed by `gradeStructureTrace`'s
+  auto-promotion path, a stated scope boundary.
+- A task-count summary and a pinned raw-input snippet at the top of the
+  preview.
+- A thumbs up/down feedback signal (`POST /api/structure/feedback`, new),
+  independent of the existing confirm/cancel outcome telemetry, captured
+  and persisted only this pass, not yet wired into grading.
+
+`docs/architecture.md`'s `structureTraces` field list, `docs/llm-pipeline.md`,
+and `docs/design-system.md` are all updated in the same pass.
+
 ## Next
 
 Phase 1's real timing data (`scripts/structure-timing-stats.mjs`) is still a
@@ -844,20 +869,25 @@ exactly which upstream layer enforced the ~90-100s cutoff; it is no longer
 a blocker for the user-facing bug, now closed by the async-Structure work
 above.
 
-Phase 3, part 10: a natural-language date parser, so a task's `due`
-normalizes into the store's real due shape instead of the human-readable
-fallback part 1 shipped (this also feeds a future Todoist push a real,
-parsed date instead of the model's raw string, though the two are separate
-concerns). `labels`, per-task `description`,
-and project `color` joining the Structure contract, each its own scoped
-pass, not bundled together. Routing a Todoist push into an existing Todoist
-project, once `readProjects`/`readLabels` are real. This entry's number was
-bumped from "part 9" to "part 10" when the redirect-URI-fix and sidebar
-entry above claimed part 9, bookkeeping only, the same convention used
-repeatedly in this doc. `docs/architecture.md`'s pipeline summary was
-brought in line with the
-combined-call, Sonnet-exception shape in phase 3 part 1; nothing
+Phase 3, part 10: `labels`, per-task `description`, and project `color`
+joining the Structure contract, each its own scoped pass, not bundled
+together. Routing a Todoist push into an existing Todoist project, once
+`readProjects`/`readLabels` are real. A real natural-language date parser,
+the other item this entry used to name, is now built (phase 3 part 12,
+above); it also feeds a future Todoist push a real, parsed date instead of
+the model's raw string, though the two stay separate concerns, the push
+itself untouched by that pass on purpose. This entry's number was bumped
+from "part 9" to "part 10" when the redirect-URI-fix and sidebar entry
+above claimed part 9, bookkeeping only, the same convention used repeatedly
+in this doc. `docs/architecture.md`'s pipeline summary was brought in line
+with the combined-call, Sonnet-exception shape in phase 3 part 1; nothing
 outstanding there.
+
+Two follow-ups from phase 3 part 12, above, each its own scoped pass:
+replaying `priorityEdits`/`dueEdits`/`sectionEdits` onto
+`gradeStructureTrace`'s auto-promotion tree (currently skipped outright
+when any are present); and wiring the new thumbs up/down `feedback` field
+into grading or auto-promotion, currently captured and persisted only.
 
 ## Out of scope
 

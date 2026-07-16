@@ -1,10 +1,68 @@
 import { useState } from 'react';
-import { priorityClass } from './PriorityPicker.jsx';
+import PriorityPicker, { priorityClass } from './PriorityPicker.jsx';
+import DatePicker from './DatePicker.jsx';
 import { IconCheck, IconCaret, IconPlus, IconHash, IconDots, IconX } from './Icons.jsx';
 import Popover from './Popover.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import { dueMeta, isOverdue } from '../lib/date.js';
 import { colorHex } from '../lib/colors.js';
+
+// A section-ref picker for the editable preview only: a small list of the
+// response's own local sections (by ref, not a real Firestore id) plus "No
+// section". No existing picker fits this shape (ProjectPicker's own section
+// list is Firestore-backed, store.listSections against a real projectId,
+// which does not exist yet for a tree still being previewed), so this is a
+// small new one, matching PriorityPicker's/DatePicker's exact chip+Popover
+// shape rather than inventing a different one. Local to this file, the only
+// caller, the same "local to the one file that uses it" convention
+// ProjectNode (Sidebar.jsx) and TreePreview (SuperRambleModal.jsx) already
+// follow.
+function SectionRefPicker({ sections, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const active = sections.find((s) => s.ref === value);
+  return (
+    <div className="popover-wrap">
+      <button
+        type="button"
+        className={`chip ${value ? 'active' : ''}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+      >
+        <IconHash width={14} height={14} className="icon" />
+        {active ? active.name : 'No section'}
+      </button>
+      {open ? (
+        <Popover onClose={() => setOpen(false)}>
+          <button
+            type="button"
+            className="popover-item"
+            onClick={() => {
+              onChange(null);
+              setOpen(false);
+            }}
+          >
+            No section
+          </button>
+          {sections.map((s) => (
+            <button
+              key={s.ref}
+              type="button"
+              className="popover-item"
+              onClick={() => {
+                onChange(s.ref);
+                setOpen(false);
+              }}
+            >
+              {s.name}
+            </button>
+          ))}
+        </Popover>
+      ) : null}
+    </div>
+  );
+}
 
 // One task and its nested sub-tasks. The checkbox completes. Priority sets the
 // ring color. The meta line carries due time in green, label chips, and the
@@ -51,8 +109,15 @@ import { colorHex } from '../lib/colors.js';
 // for a preview a user can still adjust before Confirm: the checkbox stays
 // disabled and the row stays unclickable (same as readOnly, nothing here is
 // a real task yet), but the content becomes an inline text input
-// (`onContentChange(task, newContent)`) and a plain "x" replaces the
-// Add-sub-task/"..." actions (`onRemove(task)`, no confirm dialog, since
+// (`onContentChange(task, newContent)`), a row of chip triggers lets
+// priority (`onPriorityChange(task, newPriority)`), due date
+// (`onDueChange(task, newRawDueOrNull)`, reusing DatePicker.jsx but reading
+// only its `date` back out as a plain ISO string, not the store's full due
+// shape, so it flows straight through toDue() unchanged at Confirm-time),
+// and section membership (`onSectionChange(task, newSectionRefOrNull)`,
+// `sections`, root tasks only, depth 0, since a sub-task has no sectionRef
+// of its own in this contract) all get edited too, and a plain "x" replaces
+// the Add-sub-task/"..." actions (`onRemove(task)`, no confirm dialog, since
 // nothing is written until the real Confirm). See SuperRambleModal.jsx,
 // the only caller of either mode.
 export default function TaskRow({
@@ -79,7 +144,11 @@ export default function TaskRow({
   readOnly = false,
   editable = false,
   onRemove,
-  onContentChange
+  onContentChange,
+  sections = [],
+  onPriorityChange,
+  onDueChange,
+  onSectionChange
 }) {
   const kids = childrenOf.get(task.id) || [];
   const [expanded, setExpanded] = useState(true);
@@ -175,6 +244,16 @@ export default function TaskRow({
             </div>
           )}
 
+          {editable ? (
+            <div className="task-edit-controls" onClick={(e) => e.stopPropagation()}>
+              <PriorityPicker value={task.priority} onChange={(p) => onPriorityChange(task, p)} />
+              <DatePicker value={task.due} onChange={(next) => onDueChange(task, next?.date ?? null)} />
+              {depth === 0 && sections.length ? (
+                <SectionRefPicker sections={sections} value={task.sectionId} onChange={(ref) => onSectionChange(task, ref)} />
+              ) : null}
+            </div>
+          ) : null}
+
           {kids.length ? (
             <button
               type="button"
@@ -268,6 +347,10 @@ export default function TaskRow({
               editable={editable}
               onRemove={onRemove}
               onContentChange={onContentChange}
+              sections={sections}
+              onPriorityChange={onPriorityChange}
+              onDueChange={onDueChange}
+              onSectionChange={onSectionChange}
             />
           ))
         : null}
