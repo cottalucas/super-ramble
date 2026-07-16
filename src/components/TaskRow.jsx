@@ -107,34 +107,45 @@ function SectionRefPicker({ sections, value, onChange }) {
 //
 // `editable` (default false) is the newer, less-inert sibling of `readOnly`,
 // for a preview a user can still adjust before Confirm: the checkbox stays
-// disabled (nothing here is a real task yet), and a plain "x" replaces the
-// Add-sub-task/"..." actions (`onRemove(task)`, no confirm dialog, since
-// nothing is written until the real Confirm).
+// disabled (nothing here is a real task yet).
 //
 // Collapsed vs. expanded, matching real Todoist's own Text Scan preview
 // (docs/resolution-log.md, 2026-07-17): an editable row starts collapsed,
-// content as a plain `.task-content` div and the same read-only `.task-meta`
-// line every other row already renders (the due chip, if one is set), no
-// input, no controls. Clicking the row's main area (not the remove "x")
+// content as a plain `.task-content` div and the same read-only `.task-meta`/
+// `.task-desc` blocks every other row already renders (the due chip and a
+// description snippet, if either is set), no input, no controls. Clicking
+// the row's main area (not the remove "x", moved into the footer below)
 // calls `onToggleExpand(task)`, which the caller (`TreePreview`,
 // `SuperRambleModal.jsx`) uses to drive a single `expandedTaskId`: only one
 // row across the whole tree is ever expanded at once, an accordion, matching
-// the reference screenshots. The expanded row swaps to a bordered
-// `.task-edit-card` (the same thin `1px solid var(--ds-line)` / `--ds-canvas`
-// in-place-expansion convention `.inline-add`/`.comment-add-box` already
-// use, docs/design-system.md's "Inline add-task" section, not a new visual
-// language): the content input, `onContentChange(task, newContent)`; the
-// `.task-edit-controls` row, now only rendered while expanded, not always
-// on: priority (`onPriorityChange`), due date (`onDueChange(task,
-// newRawDueOrNull)`, reusing DatePicker.jsx but reading only its `date` back
-// out as a plain ISO string, so it flows straight through toDue() unchanged
-// at Confirm-time), and section membership (`onSectionChange(task,
-// newSectionRefOrNull)`, `sections`, root tasks only, depth 0, since a
-// sub-task has no sectionRef of its own in this contract); and a single
-// "Done" button, `onToggleExpand(null)`, collapsing back. No Cancel:
-// every field here already writes to `edited` state directly on every
-// change, there is no local draft a Cancel would actually revert, so a
-// second button would look like it discards changes without doing so.
+// the reference screenshots.
+//
+// The expanded row swaps to a bordered `.task-edit-card` (the same thin
+// `1px solid var(--ds-line)` / `--ds-canvas` in-place-expansion convention
+// `.inline-add`/`.comment-add-box` already use, docs/design-system.md's
+// "Inline add-task" section, not a new visual language): the content input
+// (`onContentChange`); a description textarea (`onDescriptionChange`, a
+// real, already-existing task field this app edits everywhere else,
+// `TaskDetail.jsx`'s `.detail-desc`, just never populated by Structure's own
+// contract, the same "no model behind it" reasoning a plain Add-task form's
+// own description field already has); `.task-edit-controls`, now just
+// priority and due date (`onPriorityChange`, `onDueChange`, reusing
+// `DatePicker.jsx` but reading only its `date` back out as a plain ISO
+// string, so it flows straight through `toDue()` unchanged at Confirm-time);
+// and `.task-edit-footer` (2026-07-17, round 2, replacing a single "Done"
+// button, matching the Todoist reference's own bottom row): left side is
+// `SectionRefPicker` (root tasks only, depth 0, since a sub-task has no
+// `sectionRef` of its own in this contract) when there's one to show, or a
+// plain static `project` label otherwise (a sub-task, or no sections at
+// all), so the left side is never empty; right side is a remove "x"
+// (`onRemove(task)`, the same handler the row's own top-right action used
+// to call, hidden there while this card is open so only one remove control
+// shows at a time) and a checkmark collapsing back (`onToggleExpand(null)`).
+// No Cancel: every field here already writes to `edited` state directly on
+// every change, there is no local draft a Cancel would actually revert, so a
+// second button would look like it discards changes without doing so; the
+// footer's "x" is a real remove, matching what an X means in Todoist's own
+// add/edit-task flow, not a fake no-op cancel.
 // See SuperRambleModal.jsx, the only caller of either mode.
 export default function TaskRow({
   task,
@@ -161,6 +172,7 @@ export default function TaskRow({
   editable = false,
   onRemove,
   onContentChange,
+  onDescriptionChange,
   sections = [],
   onPriorityChange,
   onDueChange,
@@ -250,22 +262,47 @@ export default function TaskRow({
                 value={task.content}
                 onChange={(e) => onContentChange(task, e.target.value)}
               />
+              <textarea
+                className="task-edit-description"
+                placeholder="Description"
+                rows={2}
+                value={task.description || ''}
+                onChange={(e) => onDescriptionChange(task, e.target.value)}
+              />
               <div className="task-edit-controls">
                 <PriorityPicker value={task.priority} onChange={(p) => onPriorityChange(task, p)} />
                 <DatePicker value={task.due} onChange={(next) => onDueChange(task, next?.date ?? null)} />
-                {depth === 0 && sections.length ? (
-                  <SectionRefPicker sections={sections} value={task.sectionId} onChange={(ref) => onSectionChange(task, ref)} />
-                ) : null}
               </div>
-              <button type="button" className="task-edit-done" onClick={() => onToggleExpand(null)}>
-                <IconCheck width={14} height={14} className="icon" />
-                Done
-              </button>
+              <div className="task-edit-footer">
+                <div className="task-edit-footer-left">
+                  {depth === 0 && sections.length ? (
+                    <SectionRefPicker sections={sections} value={task.sectionId} onChange={(ref) => onSectionChange(task, ref)} />
+                  ) : project ? (
+                    <span className="task-edit-footer-project">
+                      <span className="project-dot" style={{ background: colorHex(project.color), width: 8, height: 8 }} />
+                      {project.name}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="task-edit-footer-actions">
+                  <button type="button" className="icon-btn" title="Remove" onClick={() => onRemove(task)}>
+                    <IconX width={15} height={15} className="icon" />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn task-edit-footer-done"
+                    title="Done"
+                    onClick={() => onToggleExpand(null)}
+                  >
+                    <IconCheck width={15} height={15} className="icon" />
+                  </button>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="task-content">{task.content}</div>
           )}
-          {task.description ? (
+          {!editOpen && task.description ? (
             <div className={`task-desc ${variant === 'card' ? 'task-desc-clamp' : ''}`}>{task.description}</div>
           ) : null}
 
@@ -302,11 +339,16 @@ export default function TaskRow({
         </div>
 
         {readOnly ? null : editable ? (
-          <div className="task-row-actions">
-            <button type="button" className="icon-btn" title="Remove" onClick={() => onRemove(task)}>
-              <IconX width={14} height={14} className="icon" />
-            </button>
-          </div>
+          // Hidden while this row's own edit card is open: the footer above
+          // already carries a remove "x", the same handler, so only one
+          // remove control ever shows for a given row at once.
+          editOpen ? null : (
+            <div className="task-row-actions">
+              <button type="button" className="icon-btn" title="Remove" onClick={() => onRemove(task)}>
+                <IconX width={14} height={14} className="icon" />
+              </button>
+            </div>
+          )
         ) : (
           <div className="task-row-actions">
             <button type="button" className="icon-btn" title="Add sub-task" onClick={() => onAddSub(task)}>
@@ -379,6 +421,7 @@ export default function TaskRow({
               editable={editable}
               onRemove={onRemove}
               onContentChange={onContentChange}
+              onDescriptionChange={onDescriptionChange}
               sections={sections}
               onPriorityChange={onPriorityChange}
               onDueChange={onDueChange}

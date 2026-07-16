@@ -833,7 +833,7 @@ textarea {
 }
 
 .checkbox:hover .check {
-  opacity: 0.5;
+  opacity: 0.9;
 }
 
 .checkbox.p1 {
@@ -1686,16 +1686,15 @@ textarea:focus {
   transition: width 400ms linear;
 }
 
-.sr-loading-estimate {
-  color: var(--ds-ink-soft);
-  font-size: 12px;
-  margin: 4px 0 0;
-}
-
+/* One merged line, 2026-07-17 (round 2): used to be two paragraphs
+   (.sr-loading-estimate's "usually under X, up to Y" plus this class's own
+   "N s elapsed"), stating the p90 ceiling twice, once as a number and once
+   as .sr-loading-bar-fill's own width above it. Now the only line; the bar
+   is the p90 story, this text is the elapsed/p50 story. */
 .sr-loading-elapsed {
   color: var(--ds-ink-soft);
   font-size: 12px;
-  margin: 2px 0 0;
+  margin: 4px 0 0;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1731,17 +1730,20 @@ textarea:focus {
   text-overflow: ellipsis;
 }
 
-/* A defensive backstop, not the primary fix: the prompt itself now asks for
-   one or two short sentences (src/pipeline/prompt.js, functions/index.js,
-   docs/resolution-log.md, 2026-07-17), but an occasional longer response
-   still should not be able to blow up the preview's layout. Two lines, not
-   .task-desc-clamp's three: this sits above the task list, not inside a
-   card, so it should read as a quick "why," not a block of its own. */
+/* A rare backstop, not the primary mechanism: the prompt itself asks for
+   one plain sentence under 20 words (src/pipeline/prompt.js,
+   functions/index.js, docs/resolution-log.md, 2026-07-17), so a normal
+   response never gets near this. 3 lines, matching .task-desc-clamp's own
+   precedent, not 2: a 2-line clamp was cutting real sentences off
+   mid-word when the model still returned more than it should have, which
+   read as broken, not concise (docs/resolution-log.md, 2026-07-17 round 2).
+   The fix for that is the tightened prompt line above; this only needs to
+   be generous enough to never fire on a compliant response. */
 .sr-reasoning {
   color: var(--ds-ink);
   margin: 0 0 4px;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -1839,12 +1841,14 @@ textarea:focus {
   padding: 0;
 }
 
-/* Editable preview: priority, due date, and section-membership triggers,
-   one row of the same .chip controls Quick-add and Task detail already use.
-   Only rendered while its own row is expanded (TaskRow.jsx's accordion,
-   docs/resolution-log.md, 2026-07-17), not always on: a collapsed row shows
-   the same read-only .task-meta line every other row in this app already
-   uses instead. */
+/* Editable preview: priority and due date triggers, the same .chip controls
+   Quick-add and Task detail already use. Only rendered while its own row is
+   expanded (TaskRow.jsx's accordion, docs/resolution-log.md, 2026-07-17),
+   not always on: a collapsed row shows the same read-only .task-meta line
+   every other row in this app already uses instead. Section membership
+   moved to .task-edit-footer below, 2026-07-17 round 2, matching the
+   reference's own project/section trigger position at the bottom of the
+   card, not this top chip row. */
 .task-edit-controls {
   display: flex;
   flex-wrap: wrap;
@@ -1871,30 +1875,75 @@ textarea:focus {
   font-weight: 600;
 }
 
-/* No Cancel beside it: every field here already writes to `edited` state
-   directly, there is no local draft a Cancel would revert, so a second
-   button would look like it discards changes without doing so. The
-   checkmark tints --ds-due-green, the same token this app's due-date text
-   already uses, a quiet nod to "done" rather than a new button color. */
-.task-edit-done {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 4px 10px;
-  border: 1px solid var(--ds-line);
-  border-radius: var(--radius);
+/* A real, already-existing task field (docs/architecture.md,
+   `users/{uid}/tasks/{taskId}.description`, edited everywhere else in this
+   app, `TaskDetail.jsx`'s `.detail-desc`), just never populated by
+   Structure's own contract. Matches `.task-content-input`'s own borderless,
+   row-colored styling rather than a boxed field, so it reads as part of the
+   same card, not a second surface. */
+.task-edit-description {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 2px 0;
+  border: 0;
+  outline: none;
+  resize: none;
   background: transparent;
   color: var(--ds-ink);
   font-size: 13px;
-  font-weight: 600;
+  font-family: inherit;
 }
 
-.task-edit-done:hover {
-  background: color-mix(in srgb, var(--ds-ink) 5%, transparent);
+/* 2026-07-17, round 2: replaces a single "Done" button with a bottom row
+   matching the Todoist reference's own layout (a project/section trigger
+   bottom-left, remove/confirm icons bottom-right), reported directly
+   against that screenshot. No Cancel: every field in this card already
+   writes to `edited` state directly, there is no local draft a Cancel
+   would revert, so a second button would look like it discards changes
+   without doing so. The left side is never empty: `SectionRefPicker` when
+   there's one to show, otherwise a plain project label (see
+   `.task-edit-footer-project` below), never blank. */
+.task-edit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ds-line);
 }
 
-.task-edit-done .icon {
+.task-edit-footer-left {
+  min-width: 0;
+  flex: 1;
+}
+
+/* The static fallback when there's no SectionRefPicker to show (a sub-task,
+   or no sections at all): the same resolved project the collapsed row's own
+   `.meta-project` would show, not a new lookup. Plain text, not a button:
+   there is no mechanism for routing one task in a single Structure response
+   into an arbitrary different project (docs/resolution-log.md, 2026-07-17),
+   so this is not a picker pretending to be one. */
+.task-edit-footer-project {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ds-ink-soft);
+  font-size: 13px;
+}
+
+.task-edit-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/* The checkmark tints --ds-due-green, the same token this app's due-date
+   text already uses, a quiet nod to "done" distinguishing it from the
+   remove "x" beside it, which stays the plain .icon-btn gray. */
+.task-edit-footer-done .icon {
   color: var(--ds-due-green);
 }
 

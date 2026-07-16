@@ -64,6 +64,13 @@ export function flattenTasks(structured) {
       parentRef: null,
       sectionRef: t.sectionRef || null,
       content: t.content,
+      // Never part of Structure's own contract (docs/llm-pipeline.md, Stage
+      // 2); only ever real once the preview's own edit card writes one back
+      // via updateTaskAtRef (SuperRambleModal.jsx, docs/resolution-log.md,
+      // 2026-07-17 round 2). `|| ''` here, not `?? ''`: an absent field on
+      // the model's own raw response and an explicitly cleared one should
+      // both flatten to the same empty value.
+      description: t.description || '',
       priority: t.priority,
       due: t.due
     });
@@ -73,6 +80,7 @@ export function flattenTasks(structured) {
         parentRef: ref,
         sectionRef: null,
         content: s.content,
+        description: s.description || '',
         priority: s.priority,
         due: s.due
       });

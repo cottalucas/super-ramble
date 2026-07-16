@@ -175,45 +175,52 @@ entry.
 - `createdAt`: server timestamp
 - `outcome`: `"pending" | "confirmed" | "cancelled" | "confirmed_with_edits"`
 - `outcomeAt`: server timestamp | null
-- `edits`: `{ removedTasks: { content: string, priority: number, sectionRef: string | null }[], projectNameChange: { from: string, to: string } | null, contentEdits: { originalContent: string, newContent: string }[], priorityEdits: { ref: string, from: number, to: number }[], dueEdits: { ref: string, from: string | null, to: string | null }[], sectionEdits: { ref: string, from: string | null, to: string | null }[] } | undefined`
+- `edits`: `{ removedTasks: { content: string, priority: number, sectionRef: string | null }[], projectNameChange: { from: string, to: string } | null, contentEdits: { originalContent: string, newContent: string }[], priorityEdits: { ref: string, from: number, to: number }[], dueEdits: { ref: string, from: string | null, to: string | null }[], sectionEdits: { ref: string, from: string | null, to: string | null }[], descriptionEdits: { ref: string, from: string, to: string }[] } | undefined`
   (present only when `outcome` is `"confirmed_with_edits"`, absent on every
   other outcome, never `null`). `response` above is always the model's real,
   untouched output; `edits` is the separate record of what the user actually
   changed in `SuperRambleModal.jsx`'s preview before Confirm. **Priority,
-  due date, and section membership are editable there now**, alongside the
-  original per-task removal, inline project-name edit, and per-task content
-  edits: each of the three new kinds reuses `updateTaskAtRef`
-  (`src/pipeline/write.js`), already generic enough to apply any field-level
-  update, not a second update mechanism. `priorityEdits`/`dueEdits`/
-  `sectionEdits` are keyed by `ref` (one of `flattenTasks`'s own refs,
-  `t{i}`/`t{i}s{j}`), unlike `contentEdits`, which is matched by its own
-  `originalContent` string instead; a due edit's `from`/`to` are always the
-  plain raw due string (or `null`), never the store's parsed `{ date,
-  datetime, string, isRecurring }` shape, the same value that actually lands
-  in `edited.tasks[].due` and flows through `toDue()` unchanged at
+  due date, section membership, and, as of 2026-07-17 round 2, description
+  are editable there now**, alongside the original per-task removal, inline
+  project-name edit, and per-task content edits: each of the four newer
+  kinds reuses `updateTaskAtRef` (`src/pipeline/write.js`), already generic
+  enough to apply any field-level update, not a second update mechanism.
+  Description is a real, already-existing task field
+  (`users/{uid}/tasks/{taskId}.description` above), just never populated by
+  Structure's own contract (`docs/llm-pipeline.md`, Stage 2); the preview's
+  edit card writes a plain user-typed value, no model behind it, the same
+  way typing one into the normal Add-task form has no model behind it
+  either. `priorityEdits`/`dueEdits`/`sectionEdits`/`descriptionEdits` are
+  keyed by `ref` (one of `flattenTasks`'s own refs, `t{i}`/`t{i}s{j}`),
+  unlike `contentEdits`, which is matched by its own `originalContent`
+  string instead; a due edit's `from`/`to` are always the plain raw due
+  string (or `null`), never the store's parsed `{ date, datetime, string,
+  isRecurring }` shape, the same value that actually lands in
+  `edited.tasks[].due` and flows through `toDue()` unchanged at
   Confirm-time. The two together (`response` and `edits`) mean the original
   proposal and the human correction on top of it are both on the trace, not
   just the corrected result: `removedTasks` carries what a removed task
   looked like at the moment it was removed (its current content if it had
   already been edited, its real priority and section), `contentEdits`/
-  `priorityEdits`/`dueEdits`/`sectionEdits` each carry only entries that
-  actually changed a value, an edit clicked or typed back to its starting
-  value is not reported. Written once, at Confirm, by the same `POST
-  /api/structure/outcome` call every outcome already used; shape-checked by
-  `isValidEdits` (`functions/index.js`) before ever reaching Firestore,
-  since this is the one field on this collection a client actually writes
-  content into, not just an enum value. **`gradeStructureTrace`'s
-  auto-promotion path does not attempt to replay `priorityEdits`/
-  `dueEdits`/`sectionEdits`**: `reconstructCorrectedTree` only ever replays
-  `contentEdits`, `removedTasks`, and `projectNameChange` onto the cloned
-  response; when any of the three new arrays is non-empty on a
-  `confirmed_with_edits` trace, auto-promotion is skipped outright and
-  logged to `pipelineLearningLog` instead, the exact same fail-closed
-  posture already documented below for an "edited, then removed" content
-  edit reconstruction cannot locate. Replaying these onto the reconstructed
-  tree is real, separate follow-up work, not attempted this pass. See
-  `docs/llm-pipeline.md`'s "Live capture and the eval flywheel" section and
-  the resolution log's editable-preview entries.
+  `priorityEdits`/`dueEdits`/`sectionEdits`/`descriptionEdits` each carry
+  only entries that actually changed a value, an edit clicked or typed back
+  to its starting value is not reported. Written once, at Confirm, by the
+  same `POST /api/structure/outcome` call every outcome already used;
+  shape-checked by `isValidEdits` (`functions/index.js`) before ever
+  reaching Firestore, since this is the one field on this collection a
+  client actually writes content into, not just an enum value.
+  **`gradeStructureTrace`'s auto-promotion path does not attempt to replay
+  `priorityEdits`/`dueEdits`/`sectionEdits`/`descriptionEdits`**:
+  `reconstructCorrectedTree` only ever replays `contentEdits`,
+  `removedTasks`, and `projectNameChange` onto the cloned response; when any
+  of these four arrays is non-empty on a `confirmed_with_edits` trace,
+  auto-promotion is skipped outright and logged to `pipelineLearningLog`
+  instead, the exact same fail-closed posture already documented below for
+  an "edited, then removed" content edit reconstruction cannot locate.
+  Replaying these onto the reconstructed tree is real, separate follow-up
+  work, not attempted this pass. See `docs/llm-pipeline.md`'s "Live capture
+  and the eval flywheel" section and the resolution log's editable-preview
+  entries.
 - `feedback`: `"up" | "down" | null`, default `null`. A thumbs up/down
   signal on the whole proposal, independent of `outcome`: the preview can
   send it any time it is showing, whether the user goes on to confirm,

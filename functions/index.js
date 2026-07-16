@@ -145,7 +145,7 @@ const STRUCTURE_SYSTEM_PROMPT_RULES = [
   'Do not collapse unrelated items into one mega-project.',
   'Report your confidence in the decision as a number from 0 to 1. When you are not confident it is a coherent project, lean toward "tasks" instead of inventing a "project" structure that might not fit.',
   'needsClarification is for routing uncertainty only, never for uncertainty about whether something is project-shaped, those are two different questions. "Is this a coherent project or loose tasks" is answered by confidence and the "tasks" fallback above, never by a question to the user. "Does this belong to something that already exists" is the one worth asking about, and only when genuinely unclear: could this new content extend one of existingProjects, or is it clearly its own new thing, or (when two existingProjects share a name) which one it means. When content is clearly new and unrelated to every existingProjects entry, propose the new project confidently, no question first: the user still reviews and confirms before anything is written.',
-  'Write reasoning the way a person would describe what they heard: plain language about their actual plans or errands. Never refer to "the dump" or "the transcript" as if reasoning were describing an input variable; describe the content itself. Keep it to one or two short sentences, not a paragraph.',
+  'Write reasoning the way a person would describe what they heard: plain language about their actual plans or errands. Never refer to "the dump" or "the transcript" as if reasoning were describing an input variable; describe the content itself. Keep it under 20 words, one plain sentence.',
   'Add sections only when what they said names distinct workstreams that benefit from separation. Most need none; do not force a single-thread project into sections. Give each section a local ref and a name, and give a task a sectionRef only when it names one of those sections.',
   'Priority runs 1 to 4, and 1 is the most urgent, the red flag, while 4 means no priority at all, the default when nothing in the transcript signals urgency. Map "urgent," "ASAP," "important," "that one is critical," or a task tied to a near, named deadline toward 1. Map "not urgent," "no rush," or "whenever" toward 4. Get the direction right: the more urgent the words, the lower the number. "Important" carries the same weight as "urgent," not a softer one: a task the speaker calls out as important gets priority 1 too, not quietly downgraded to 2 or 3 just because the word itself reads gentler than "urgent" in everyday English.',
   'Never reference an internal id in clarificationQuestion, or anywhere else a person reads. An id like "ARW606qp9EbPUAPK1Ypa" means nothing to a user; there is no way for them to answer a question that asks them to choose one. If two or more existingProjects share the same name and routing is genuinely ambiguous, ask the user to disambiguate in their own words instead: a distinguishing detail they would know (what it is for, roughly when they made it), or simply note that two projects share that name and ask which one they mean. Never resolve that ambiguity by stating an id.'
@@ -339,12 +339,12 @@ function today() {
 // it ever reaches a Firestore write: { removedTasks: [{ content, priority,
 // sectionRef }], projectNameChange: { from, to } | null, contentEdits:
 // [{ originalContent, newContent }], priorityEdits: [{ ref, from, to }],
-// dueEdits: [{ ref, from, to }], sectionEdits: [{ ref, from, to }] }. Every
-// field is optional (a client omits whichever category had nothing to
-// report), but whatever is present must match this shape; this is the one
-// client-writable field on structureTraces, so it gets the same discipline
-// STRUCTURE_JSON_SCHEMA gives the model's own response. See
-// docs/architecture.md.
+// dueEdits: [{ ref, from, to }], sectionEdits: [{ ref, from, to }],
+// descriptionEdits: [{ ref, from, to }] }. Every field is optional (a client
+// omits whichever category had nothing to report), but whatever is present
+// must match this shape; this is the one client-writable field on
+// structureTraces, so it gets the same discipline STRUCTURE_JSON_SCHEMA
+// gives the model's own response. See docs/architecture.md.
 function isValidRefEditList(list, isValidValue) {
   if (!Array.isArray(list)) return false;
   for (const e of list) {
@@ -358,10 +358,11 @@ function isValidRefEditList(list, isValidValue) {
 const isValidPriorityValue = (v) => Number.isInteger(v) && v >= 1 && v <= 4;
 const isValidDueValue = (v) => v === null || typeof v === 'string';
 const isValidSectionRefValue = (v) => v === null || typeof v === 'string';
+const isValidDescriptionValue = (v) => typeof v === 'string';
 
 function isValidEdits(edits) {
   if (edits == null || typeof edits !== 'object' || Array.isArray(edits)) return false;
-  const { removedTasks, projectNameChange, contentEdits, priorityEdits, dueEdits, sectionEdits } = edits;
+  const { removedTasks, projectNameChange, contentEdits, priorityEdits, dueEdits, sectionEdits, descriptionEdits } = edits;
 
   if (removedTasks !== undefined) {
     if (!Array.isArray(removedTasks)) return false;
@@ -395,6 +396,10 @@ function isValidEdits(edits) {
   if (priorityEdits !== undefined && !isValidRefEditList(priorityEdits, isValidPriorityValue)) return false;
   if (dueEdits !== undefined && !isValidRefEditList(dueEdits, isValidDueValue)) return false;
   if (sectionEdits !== undefined && !isValidRefEditList(sectionEdits, isValidSectionRefValue)) return false;
+  // Fourth field-level edit kind, 2026-07-17 round 2: a real, already-
+  // existing task field (docs/architecture.md), just never populated by
+  // Structure's own contract until the preview's edit card writes one.
+  if (descriptionEdits !== undefined && !isValidRefEditList(descriptionEdits, isValidDescriptionValue)) return false;
 
   return true;
 }
@@ -771,7 +776,8 @@ exports.api = onRequest(
             contentEdits: edits.contentEdits || [],
             priorityEdits: edits.priorityEdits || [],
             dueEdits: edits.dueEdits || [],
-            sectionEdits: edits.sectionEdits || []
+            sectionEdits: edits.sectionEdits || [],
+            descriptionEdits: edits.descriptionEdits || []
           };
         }
         await db.doc(`users/${user.uid}/structureTraces/${traceId}`).set(update, { merge: true });
@@ -1517,27 +1523,29 @@ exports.gradeStructureTrace = onDocumentWritten(
         return;
       }
 
-      // The editable preview's newer field, priority/due/section membership
+      // The editable preview's newer fields, priority/due/section membership
+      // and, as of 2026-07-17 round 2, description
       // (docs/llm-pipeline.md's "Live capture and the eval flywheel"):
       // reconstructCorrectedTree below only ever replays contentEdits,
       // removedTasks, and projectNameChange onto the cloned response, since
       // that is the exact set the "edited, then removed" reasoning in its
-      // own comment was written against. Replaying priority/due/section
-      // changes too is real, separate follow-up work, not attempted here;
-      // promoting a tree that silently drops a real edit the user made
-      // would be worse than not promoting at all, the same fail-closed
-      // posture the warnings check just below already takes on a content
-      // edit or removal it cannot locate.
+      // own comment was written against. Replaying these four too is real,
+      // separate follow-up work, not attempted here; promoting a tree that
+      // silently drops a real edit the user made would be worse than not
+      // promoting at all, the same fail-closed posture the warnings check
+      // just below already takes on a content edit or removal it cannot
+      // locate.
       const hasUnreplayableEdits =
         (afterData.edits.priorityEdits || []).length > 0 ||
         (afterData.edits.dueEdits || []).length > 0 ||
-        (afterData.edits.sectionEdits || []).length > 0;
+        (afterData.edits.sectionEdits || []).length > 0 ||
+        (afterData.edits.descriptionEdits || []).length > 0;
       if (hasUnreplayableEdits) {
         await logPipelineLearning({
           kind: 'flagged',
           uid,
           traceId,
-          summary: `Not auto-promoted (priority, due, or section-membership edits cannot be replayed onto the reconstructed tree yet). ${judgeNotes}`
+          summary: `Not auto-promoted (priority, due, section-membership, or description edits cannot be replayed onto the reconstructed tree yet). ${judgeNotes}`
         });
         return;
       }

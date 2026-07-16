@@ -65,11 +65,13 @@ function TreePreview({
   editedStructured,
   onRemove,
   onContentChange,
+  onDescriptionChange,
   onPriorityChange,
   onDueChange,
   onSectionChange,
   expandedTaskId,
-  onToggleExpand
+  onToggleExpand,
+  previewProject
 }) {
   const flat = flattenTasks(editedStructured);
   const rows = flat.map((t, i) => ({
@@ -77,6 +79,12 @@ function TreePreview({
     parentId: t.parentRef || null,
     sectionId: t.sectionRef || null,
     content: t.content,
+    // A real, already-existing task field (docs/architecture.md), just
+    // never populated by Structure's own contract; `flattenTasks`
+    // (src/pipeline/write.js) carries it through like every other field on
+    // a flattened row, this is just where it lands on the row object
+    // TaskRow actually renders.
+    description: t.description || '',
     priority: t.priority,
     // `due` is the parsed shape (dueMeta's display, DatePicker's own `value`
     // prop); `dueRaw` is the model's own unparsed string underneath it,
@@ -121,12 +129,15 @@ function TreePreview({
                 editable
                 onRemove={onRemove}
                 onContentChange={onContentChange}
+                onDescriptionChange={onDescriptionChange}
                 sections={sections}
                 onPriorityChange={onPriorityChange}
                 onDueChange={onDueChange}
                 onSectionChange={onSectionChange}
                 expandedTaskId={expandedTaskId}
                 onToggleExpand={onToggleExpand}
+                showProject={Boolean(previewProject)}
+                project={previewProject}
               />
             ))}
           </div>
@@ -141,10 +152,13 @@ function TreePreview({
           editable
           onRemove={onRemove}
           onContentChange={onContentChange}
+          onDescriptionChange={onDescriptionChange}
           sections={sections}
           onPriorityChange={onPriorityChange}
           onDueChange={onDueChange}
           onSectionChange={onSectionChange}
+          showProject={Boolean(previewProject)}
+          project={previewProject}
           expandedTaskId={expandedTaskId}
           onToggleExpand={onToggleExpand}
         />
@@ -249,7 +263,8 @@ export default function SuperRambleModal({ onClose }) {
     contentEdits: [],
     priorityEdits: [],
     dueEdits: [],
-    sectionEdits: []
+    sectionEdits: [],
+    descriptionEdits: []
   });
   const [errorMsg, setErrorMsg] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -483,7 +498,7 @@ export default function SuperRambleModal({ onClose }) {
       // JSON.parse(JSON.stringify(...)) is sufficient here, the response is
       // already plain JSON-shaped data with no functions or dates in it.
       setEdited(JSON.parse(JSON.stringify(result)));
-      setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [] });
+      setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [], descriptionEdits: [] });
       setFeedback(null);
       setExpandedTaskId(null);
       setTraceId(traceIdRef.current);
@@ -502,7 +517,7 @@ export default function SuperRambleModal({ onClose }) {
     setState('input');
     setStructured(null);
     setEdited(null);
-    setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [] });
+    setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [], descriptionEdits: [] });
     setFeedback(null);
     setExpandedTaskId(null);
     setErrorMsg('');
@@ -526,7 +541,8 @@ export default function SuperRambleModal({ onClose }) {
       contentEdits: log.contentEdits.filter((e) => e.ref !== task.id),
       priorityEdits: log.priorityEdits.filter((e) => e.ref !== task.id),
       dueEdits: log.dueEdits.filter((e) => e.ref !== task.id),
-      sectionEdits: log.sectionEdits.filter((e) => e.ref !== task.id)
+      sectionEdits: log.sectionEdits.filter((e) => e.ref !== task.id),
+      descriptionEdits: log.descriptionEdits.filter((e) => e.ref !== task.id)
     }));
   }
 
@@ -604,6 +620,27 @@ export default function SuperRambleModal({ onClose }) {
     });
   }
 
+  // The fourth field-level edit kind, wired exactly like priority/due/
+  // section above, 2026-07-17 round 2: a real, already-existing task field
+  // (docs/architecture.md), just never populated by Structure's own
+  // contract (docs/llm-pipeline.md, Stage 2). No new update mechanism.
+  function editTaskDescription(task, newDescription) {
+    setEdited((prev) => ({
+      ...prev,
+      tasks: updateTaskAtRef(prev.tasks, task.id, (t) => ({ ...t, description: newDescription }))
+    }));
+    setEditLog((log) => {
+      const existing = log.descriptionEdits.find((e) => e.ref === task.id);
+      if (existing) {
+        return { ...log, descriptionEdits: log.descriptionEdits.map((e) => (e.ref === task.id ? { ...e, to: newDescription } : e)) };
+      }
+      return {
+        ...log,
+        descriptionEdits: [...log.descriptionEdits, { ref: task.id, from: task.description || '', to: newDescription }]
+      };
+    });
+  }
+
   function editProjectName(newName) {
     setEdited((prev) => ({ ...prev, project: { ...prev.project, name: newName } }));
   }
@@ -663,13 +700,15 @@ export default function SuperRambleModal({ onClose }) {
     const priorityEdits = editLog.priorityEdits.filter((e) => e.from !== e.to);
     const dueEdits = editLog.dueEdits.filter((e) => e.from !== e.to);
     const sectionEdits = editLog.sectionEdits.filter((e) => e.from !== e.to);
+    const descriptionEdits = editLog.descriptionEdits.filter((e) => e.from !== e.to);
     const hasEdits =
       editLog.removedTasks.length > 0 ||
       contentEdits.length > 0 ||
       Boolean(projectNameChange) ||
       priorityEdits.length > 0 ||
       dueEdits.length > 0 ||
-      sectionEdits.length > 0;
+      sectionEdits.length > 0 ||
+      descriptionEdits.length > 0;
     if (hasEdits) {
       recordOutcome(traceId, 'confirmed_with_edits', {
         removedTasks: editLog.removedTasks,
@@ -677,7 +716,8 @@ export default function SuperRambleModal({ onClose }) {
         contentEdits,
         priorityEdits,
         dueEdits,
-        sectionEdits
+        sectionEdits,
+        descriptionEdits
       });
     } else {
       recordOutcome(traceId, 'confirmed');
@@ -756,11 +796,9 @@ export default function SuperRambleModal({ onClose }) {
                       style={{ width: `${Math.min(100, (waitingElapsedSec / STRUCTURE_P90_SECONDS) * 100)}%` }}
                     />
                   </div>
-                  <p className="sr-loading-estimate">
-                    Usually under {STRUCTURE_P50_SECONDS}s. Longer or more tangled brain-dumps can take up to{' '}
-                    {STRUCTURE_P90_SECONDS}s.
+                  <p className="sr-loading-elapsed">
+                    {waitingElapsedSec}s elapsed, usually under {STRUCTURE_P50_SECONDS}s.
                   </p>
-                  <p className="sr-loading-elapsed">{waitingElapsedSec}s elapsed</p>
                 </>
               ) : null}
               <LoadingTips />
@@ -837,6 +875,17 @@ export default function SuperRambleModal({ onClose }) {
                   ? projects.find((p) => p.id === structured.targetProjectId)
                   : null;
               const isLooseTasks = structured.decision === 'tasks';
+              // The same resolved project the header above already shows,
+              // reused for every row's own `.meta-project` chip (collapsed)
+              // and `.task-edit-footer-project` fallback (expanded, when
+              // there's no section to show instead), one resolution, not
+              // two, docs/resolution-log.md, 2026-07-17 round 2. `null` for
+              // the new-project case on purpose: there is no real project
+              // entity yet (no color, the name is still editable), and the
+              // header's own "Suggested project name" already covers that
+              // case unambiguously, so a per-row chip there would have
+              // nothing real to show.
+              const previewProject = targetProject || (isLooseTasks ? projects.find((p) => p.id === inboxId) : null);
               // Hidden entirely outside this one case: routing into an
               // existing project, loose tasks, and "not connected" all skip
               // a second real external write nobody asked for here. See
@@ -906,11 +955,13 @@ export default function SuperRambleModal({ onClose }) {
                       editedStructured={edited}
                       onRemove={removeTask}
                       onContentChange={editTaskContent}
+                      onDescriptionChange={editTaskDescription}
                       onPriorityChange={editTaskPriority}
                       onDueChange={editTaskDue}
                       onSectionChange={editTaskSection}
                       expandedTaskId={expandedTaskId}
                       onToggleExpand={(t) => setExpandedTaskId(t ? t.id : null)}
+                      previewProject={previewProject}
                     />
                   </div>
                   <div className="modal-footer">
