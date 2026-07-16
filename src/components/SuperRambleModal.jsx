@@ -9,6 +9,7 @@ import { getAuthToken } from '../lib/authToken.js';
 import { createTodoistClient } from '../todoist/index.js';
 import TaskRow, { buildChildrenMap } from './TaskRow.jsx';
 import VoiceRecorder from './VoiceRecorder.jsx';
+import { IconThumbsUp, IconThumbsDown } from './Icons.jsx';
 
 // A few minutes, comfortably above processStructureTrace's own 180s
 // timeoutSeconds ceiling (functions/index.js, reasoned from real Cloud
@@ -47,7 +48,7 @@ const STRUCTURE_P90_SECONDS = 96;
 // flattenTasks's own refs (`t{i}`/`t{i}s{j}`), so the caller can hand it
 // straight to `updateTaskAtRef` without this component needing to know
 // anything about that scheme itself.
-function TreePreview({ editedStructured, onRemove, onContentChange }) {
+function TreePreview({ editedStructured, onRemove, onContentChange, onPriorityChange, onDueChange, onSectionChange }) {
   const flat = flattenTasks(editedStructured);
   const rows = flat.map((t, i) => ({
     id: t.ref,
@@ -55,7 +56,14 @@ function TreePreview({ editedStructured, onRemove, onContentChange }) {
     sectionId: t.sectionRef || null,
     content: t.content,
     priority: t.priority,
+    // `due` is the parsed shape (dueMeta's display, DatePicker's own `value`
+    // prop); `dueRaw` is the model's own unparsed string underneath it,
+    // what onDueChange's "from" actually diffs against and what
+    // updateTaskAtRef writes back into `edited.tasks`, since a preview task's
+    // real `due` field stays a raw string until toProjectTree's own toDue()
+    // call at Confirm-time, no second due-shape needed on that field itself.
     due: toDue(t.due),
+    dueRaw: t.due,
     completed: false,
     labels: [],
     order: i
@@ -91,6 +99,10 @@ function TreePreview({ editedStructured, onRemove, onContentChange }) {
                 editable
                 onRemove={onRemove}
                 onContentChange={onContentChange}
+                sections={sections}
+                onPriorityChange={onPriorityChange}
+                onDueChange={onDueChange}
+                onSectionChange={onSectionChange}
               />
             ))}
           </div>
@@ -105,10 +117,25 @@ function TreePreview({ editedStructured, onRemove, onContentChange }) {
           editable
           onRemove={onRemove}
           onContentChange={onContentChange}
+          sections={sections}
+          onPriorityChange={onPriorityChange}
+          onDueChange={onDueChange}
+          onSectionChange={onSectionChange}
         />
       ))}
     </div>
   );
+}
+
+// The pinned raw-input snippet at the top of the preview, so the user does
+// not lose the thread of what they said while reviewing the proposal below
+// it: collapsed to one line (internal newlines/runs of whitespace flattened,
+// not just clipped by CSS) and truncated with an ellipsis past a short
+// length. `title` on the caller carries the full text as a native tooltip,
+// no extra UI for it.
+function truncateSnippet(text, max = 90) {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
 }
 
 // Teaching content for the wait, not a spinner with jokes: the same ground
@@ -162,6 +189,17 @@ export default function SuperRambleModal({ onClose }) {
   // subscribed until the trace naturally resolves or the watchdog fires.
   const unsubscribeTraceRef = useRef(null);
   const [structured, setStructured] = useState(null);
+  // The exact text actually submitted (typed or voice-transcribed),
+  // captured once at submit time rather than read live from `text`: the
+  // preview's pinned snippet must always show what was really sent to the
+  // model, decoupled from `text`'s own lifecycle (the textarea itself
+  // isn't even rendered once state moves past 'input').
+  const [submittedTranscript, setSubmittedTranscript] = useState('');
+  // A thumbs up/down signal on the whole proposal, independent of and
+  // before any outcome (Confirm/Discard) decision. `null` until the user
+  // picks one; a later pick just overwrites it, both here and server-side
+  // (POST /api/structure/feedback is a toggle, not an append-only log).
+  const [feedback, setFeedback] = useState(null);
   // `edited` is the working copy the preview actually renders and Confirm
   // actually writes: a deep clone of `structured`, seeded once per proposal,
   // mutated only through removeTask/editTaskContent/editProjectName below.
@@ -174,7 +212,13 @@ export default function SuperRambleModal({ onClose }) {
   // be at t2" from "whatever now happens to be at t2". Capturing at the
   // moment of each action sidesteps that entirely.
   const [edited, setEdited] = useState(null);
-  const [editLog, setEditLog] = useState({ removedTasks: [], contentEdits: [] });
+  const [editLog, setEditLog] = useState({
+    removedTasks: [],
+    contentEdits: [],
+    priorityEdits: [],
+    dueEdits: [],
+    sectionEdits: []
+  });
   const [errorMsg, setErrorMsg] = useState('');
   const [confirming, setConfirming] = useState(false);
   // Always defaults off, on every fresh proposal: this is a second real
@@ -358,6 +402,32 @@ export default function SuperRambleModal({ onClose }) {
     })();
   }
 
+  // A thumbs up/down on the whole proposal, independent of and before any
+  // outcome decision: sets the button state optimistically, then posts.
+  // Unlike recordOutcome above, a failure here does surface, through this
+  // app's existing quiet toast (`flash`), the same non-blocking pattern
+  // "Could not save. Try Confirm again." already uses elsewhere on this
+  // modal, since this is a real signal worth knowing didn't land, not pure
+  // background telemetry.
+  async function sendFeedback(value) {
+    if (!traceId) return;
+    setFeedback(value);
+    try {
+      const token = await getAuthToken(isLocal);
+      const res = await fetch('/api/structure/feedback', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ traceId, feedback: value })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      flash('Could not save feedback. Try again.');
+    }
+  }
+
   async function submit() {
     const transcript = text.trim();
     if (!transcript) return;
@@ -367,12 +437,14 @@ export default function SuperRambleModal({ onClose }) {
       const existingProjects = projects.filter((p) => !p.isInbox).map((p) => ({ id: p.id, name: p.name }));
       const result = await structureTranscript({ transcript, existingProjects, callModel });
       setStructured(result);
+      setSubmittedTranscript(transcript);
       // Deep clone, not a reference: edits below must never touch `result`
       // itself, since that is exactly what gets persisted to the trace.
       // JSON.parse(JSON.stringify(...)) is sufficient here, the response is
       // already plain JSON-shaped data with no functions or dates in it.
       setEdited(JSON.parse(JSON.stringify(result)));
-      setEditLog({ removedTasks: [], contentEdits: [] });
+      setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [] });
+      setFeedback(null);
       setTraceId(traceIdRef.current);
       setState('preview');
     } catch (err) {
@@ -389,7 +461,8 @@ export default function SuperRambleModal({ onClose }) {
     setState('input');
     setStructured(null);
     setEdited(null);
-    setEditLog({ removedTasks: [], contentEdits: [] });
+    setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [] });
+    setFeedback(null);
     setErrorMsg('');
   }
 
@@ -403,7 +476,10 @@ export default function SuperRambleModal({ onClose }) {
     setEdited((prev) => ({ ...prev, tasks: updateTaskAtRef(prev.tasks, task.id, () => null) }));
     setEditLog((log) => ({
       removedTasks: [...log.removedTasks, { content: task.content, priority: task.priority, sectionRef: task.sectionId ?? null }],
-      contentEdits: log.contentEdits.filter((e) => e.ref !== task.id)
+      contentEdits: log.contentEdits.filter((e) => e.ref !== task.id),
+      priorityEdits: log.priorityEdits.filter((e) => e.ref !== task.id),
+      dueEdits: log.dueEdits.filter((e) => e.ref !== task.id),
+      sectionEdits: log.sectionEdits.filter((e) => e.ref !== task.id)
     }));
   }
 
@@ -423,6 +499,61 @@ export default function SuperRambleModal({ onClose }) {
         return { ...log, contentEdits: log.contentEdits.map((e) => (e.ref === task.id ? { ...e, newContent } : e)) };
       }
       return { ...log, contentEdits: [...log.contentEdits, { ref: task.id, originalContent: task.content, newContent }] };
+    });
+  }
+
+  // Priority, due, and section-membership edits, the same "capture at the
+  // moment of the action, keyed by ref" discipline editTaskContent already
+  // uses, and the same reason: flattenTasks's refs are positional, so a
+  // diff computed later against the shifted state could no longer tell one
+  // ref's original value from whatever now happens to sit at that ref.
+  // `task.priority`/`task.dueRaw`/`task.sectionId` here are always the
+  // value immediately before this change: React has not yet applied the
+  // state update this call triggers.
+  function editTaskPriority(task, newPriority) {
+    setEdited((prev) => ({
+      ...prev,
+      tasks: updateTaskAtRef(prev.tasks, task.id, (t) => ({ ...t, priority: newPriority }))
+    }));
+    setEditLog((log) => {
+      const existing = log.priorityEdits.find((e) => e.ref === task.id);
+      if (existing) {
+        return { ...log, priorityEdits: log.priorityEdits.map((e) => (e.ref === task.id ? { ...e, to: newPriority } : e)) };
+      }
+      return { ...log, priorityEdits: [...log.priorityEdits, { ref: task.id, from: task.priority, to: newPriority }] };
+    });
+  }
+
+  // `task.dueRaw` (TreePreview), not `task.due`: the row's `due` is the
+  // parsed { date, datetime, string, isRecurring } shape DatePicker and
+  // dueMeta need to display, but the edit itself, and what gets written
+  // back into `edited.tasks`, is always the plain raw due string toDue()
+  // expects at Confirm-time.
+  function editTaskDue(task, newRawDue) {
+    setEdited((prev) => ({
+      ...prev,
+      tasks: updateTaskAtRef(prev.tasks, task.id, (t) => ({ ...t, due: newRawDue }))
+    }));
+    setEditLog((log) => {
+      const existing = log.dueEdits.find((e) => e.ref === task.id);
+      if (existing) {
+        return { ...log, dueEdits: log.dueEdits.map((e) => (e.ref === task.id ? { ...e, to: newRawDue } : e)) };
+      }
+      return { ...log, dueEdits: [...log.dueEdits, { ref: task.id, from: task.dueRaw ?? null, to: newRawDue }] };
+    });
+  }
+
+  function editTaskSection(task, newSectionRef) {
+    setEdited((prev) => ({
+      ...prev,
+      tasks: updateTaskAtRef(prev.tasks, task.id, (t) => ({ ...t, sectionRef: newSectionRef }))
+    }));
+    setEditLog((log) => {
+      const existing = log.sectionEdits.find((e) => e.ref === task.id);
+      if (existing) {
+        return { ...log, sectionEdits: log.sectionEdits.map((e) => (e.ref === task.id ? { ...e, to: newSectionRef } : e)) };
+      }
+      return { ...log, sectionEdits: [...log.sectionEdits, { ref: task.id, from: task.sectionId ?? null, to: newSectionRef }] };
     });
   }
 
@@ -476,16 +607,30 @@ export default function SuperRambleModal({ onClose }) {
     // Edits that ended up back at their original value (typed, then typed
     // back) are not worth reporting as a real edit; filtered before hasEdits
     // is computed, not after, so that case alone does not flip the outcome
-    // to confirmed_with_edits with an otherwise-empty edits object.
+    // to confirmed_with_edits with an otherwise-empty edits object. Same
+    // rule for the three new edit kinds below: a priority/date/section
+    // chip clicked back to its starting value is not a real edit either.
     const contentEdits = editLog.contentEdits
       .filter((e) => e.originalContent !== e.newContent)
       .map(({ originalContent, newContent }) => ({ originalContent, newContent }));
-    const hasEdits = editLog.removedTasks.length > 0 || contentEdits.length > 0 || Boolean(projectNameChange);
+    const priorityEdits = editLog.priorityEdits.filter((e) => e.from !== e.to);
+    const dueEdits = editLog.dueEdits.filter((e) => e.from !== e.to);
+    const sectionEdits = editLog.sectionEdits.filter((e) => e.from !== e.to);
+    const hasEdits =
+      editLog.removedTasks.length > 0 ||
+      contentEdits.length > 0 ||
+      Boolean(projectNameChange) ||
+      priorityEdits.length > 0 ||
+      dueEdits.length > 0 ||
+      sectionEdits.length > 0;
     if (hasEdits) {
       recordOutcome(traceId, 'confirmed_with_edits', {
         removedTasks: editLog.removedTasks,
         projectNameChange,
-        contentEdits
+        contentEdits,
+        priorityEdits,
+        dueEdits,
+        sectionEdits
       });
     } else {
       recordOutcome(traceId, 'confirmed');
@@ -602,6 +747,9 @@ export default function SuperRambleModal({ onClose }) {
                 return (
                   <>
                     <div className="modal-body sr-body">
+                      <p className="sr-transcript-snippet" title={submittedTranscript}>
+                        {truncateSnippet(submittedTranscript)}
+                      </p>
                       <p className="sr-reasoning">{structured.reasoning}</p>
                       <p className="sr-clarify">{structured.clarificationQuestion}</p>
                     </div>
@@ -624,11 +772,42 @@ export default function SuperRambleModal({ onClose }) {
               // a second real external write nobody asked for here. See
               // docs/roadmap.md, phase 3 part 8.
               const showTodoistToggle = isNewProject && todoistConnected;
+              // flattenTasks already walks root tasks plus every nested
+              // subtask in one flat list (TreePreview builds its own rows
+              // from the exact same call), so its length is the total task
+              // count with no separate counting logic to keep in sync.
+              const taskCount = flattenTasks(edited).length;
               return (
                 <>
                   <div className="modal-body sr-body sr-preview-body">
+                    <p className="sr-transcript-snippet" title={submittedTranscript}>
+                      {truncateSnippet(submittedTranscript)}
+                    </p>
+                    <p className="sr-task-count">
+                      {taskCount} task{taskCount === 1 ? '' : 's'} generated
+                    </p>
                     <p className="sr-reasoning">{structured.reasoning}</p>
-                    <p className="sr-confidence">Confidence {Math.round(structured.confidence * 100)}%</p>
+                    <div className="sr-confidence-row">
+                      <p className="sr-confidence">Confidence {Math.round(structured.confidence * 100)}%</p>
+                      <div className="sr-feedback">
+                        <button
+                          type="button"
+                          className={`icon-btn ${feedback === 'up' ? 'sr-feedback-selected' : ''}`}
+                          title="This looks right"
+                          onClick={() => sendFeedback('up')}
+                        >
+                          <IconThumbsUp width={15} height={15} />
+                        </button>
+                        <button
+                          type="button"
+                          className={`icon-btn ${feedback === 'down' ? 'sr-feedback-selected' : ''}`}
+                          title="This looks off"
+                          onClick={() => sendFeedback('down')}
+                        >
+                          <IconThumbsDown width={15} height={15} />
+                        </button>
+                      </div>
+                    </div>
                     {isNewProject ? (
                       <input
                         type="text"
@@ -638,7 +817,14 @@ export default function SuperRambleModal({ onClose }) {
                         onChange={(e) => editProjectName(e.target.value)}
                       />
                     ) : null}
-                    <TreePreview editedStructured={edited} onRemove={removeTask} onContentChange={editTaskContent} />
+                    <TreePreview
+                      editedStructured={edited}
+                      onRemove={removeTask}
+                      onContentChange={editTaskContent}
+                      onPriorityChange={editTaskPriority}
+                      onDueChange={editTaskDue}
+                      onSectionChange={editTaskSection}
+                    />
                   </div>
                   <div className="modal-footer">
                     {showTodoistToggle ? (

@@ -338,14 +338,30 @@ function today() {
 // Shape-checks POST /api/structure/outcome's optional edits payload before
 // it ever reaches a Firestore write: { removedTasks: [{ content, priority,
 // sectionRef }], projectNameChange: { from, to } | null, contentEdits:
-// [{ originalContent, newContent }] }. Every field is optional (a client
-// omits whichever category had nothing to report), but whatever is present
-// must match this shape; this is the one client-writable field on
-// structureTraces, so it gets the same discipline STRUCTURE_JSON_SCHEMA
-// gives the model's own response. See docs/architecture.md.
+// [{ originalContent, newContent }], priorityEdits: [{ ref, from, to }],
+// dueEdits: [{ ref, from, to }], sectionEdits: [{ ref, from, to }] }. Every
+// field is optional (a client omits whichever category had nothing to
+// report), but whatever is present must match this shape; this is the one
+// client-writable field on structureTraces, so it gets the same discipline
+// STRUCTURE_JSON_SCHEMA gives the model's own response. See
+// docs/architecture.md.
+function isValidRefEditList(list, isValidValue) {
+  if (!Array.isArray(list)) return false;
+  for (const e of list) {
+    if (!e || typeof e !== 'object') return false;
+    if (typeof e.ref !== 'string' || !e.ref) return false;
+    if (!isValidValue(e.from) || !isValidValue(e.to)) return false;
+  }
+  return true;
+}
+
+const isValidPriorityValue = (v) => Number.isInteger(v) && v >= 1 && v <= 4;
+const isValidDueValue = (v) => v === null || typeof v === 'string';
+const isValidSectionRefValue = (v) => v === null || typeof v === 'string';
+
 function isValidEdits(edits) {
   if (edits == null || typeof edits !== 'object' || Array.isArray(edits)) return false;
-  const { removedTasks, projectNameChange, contentEdits } = edits;
+  const { removedTasks, projectNameChange, contentEdits, priorityEdits, dueEdits, sectionEdits } = edits;
 
   if (removedTasks !== undefined) {
     if (!Array.isArray(removedTasks)) return false;
@@ -369,6 +385,16 @@ function isValidEdits(edits) {
       if (typeof e.originalContent !== 'string' || typeof e.newContent !== 'string') return false;
     }
   }
+
+  // The editable preview's newer field, priority/due/section membership
+  // (docs/llm-pipeline.md's "Live capture and the eval flywheel"): each is
+  // a { ref, from, to } list, ref being one of flattenTasks's own refs
+  // (src/pipeline/write.js), not validated further here, the same "shape
+  // only, not semantic resolution" discipline this function already gives
+  // removedTasks/contentEdits.
+  if (priorityEdits !== undefined && !isValidRefEditList(priorityEdits, isValidPriorityValue)) return false;
+  if (dueEdits !== undefined && !isValidRefEditList(dueEdits, isValidDueValue)) return false;
+  if (sectionEdits !== undefined && !isValidRefEditList(sectionEdits, isValidSectionRefValue)) return false;
 
   return true;
 }
@@ -742,10 +768,35 @@ exports.api = onRequest(
           update.edits = {
             removedTasks: edits.removedTasks || [],
             projectNameChange: edits.projectNameChange ?? null,
-            contentEdits: edits.contentEdits || []
+            contentEdits: edits.contentEdits || [],
+            priorityEdits: edits.priorityEdits || [],
+            dueEdits: edits.dueEdits || [],
+            sectionEdits: edits.sectionEdits || []
           };
         }
         await db.doc(`users/${user.uid}/structureTraces/${traceId}`).set(update, { merge: true });
+        res.json({ ok: true });
+        return;
+      }
+
+      // (a3) A thumbs up/down signal on the whole proposal, independent of
+      // and before any outcome write: the preview can send this the moment
+      // it is showing, whether the user goes on to Confirm, Confirm with
+      // edits, or Discard. A toggle, not an append-only log, same
+      // merge-write shape as outcome above: a later call simply overwrites
+      // the earlier value. No checkAndReserveLimit/logUsage, the same
+      // reason /todoist/status and friends skip it too (docs/architecture.md):
+      // this spends no model call. Deliberately narrow this pass: `feedback`
+      // is captured and persisted only, not read by gradeStructureTrace or
+      // auto-promotion below, each its own separate future decision; see
+      // docs/architecture.md's structureTraces field list.
+      if (endsWithPath(req, '/structure/feedback') && req.method === 'POST') {
+        const { traceId, feedback } = req.body || {};
+        if (typeof traceId !== 'string' || !traceId || !['up', 'down'].includes(feedback)) {
+          res.status(400).json({ error: "traceId and a valid feedback ('up' or 'down') are required" });
+          return;
+        }
+        await db.doc(`users/${user.uid}/structureTraces/${traceId}`).set({ feedback }, { merge: true });
         res.json({ ok: true });
         return;
       }
@@ -1462,6 +1513,31 @@ exports.gradeStructureTrace = onDocumentWritten(
           uid,
           traceId,
           summary: `Not auto-promoted (routes to an existing project by internal id, not reusable as a teaching example). ${judgeNotes}`
+        });
+        return;
+      }
+
+      // The editable preview's newer field, priority/due/section membership
+      // (docs/llm-pipeline.md's "Live capture and the eval flywheel"):
+      // reconstructCorrectedTree below only ever replays contentEdits,
+      // removedTasks, and projectNameChange onto the cloned response, since
+      // that is the exact set the "edited, then removed" reasoning in its
+      // own comment was written against. Replaying priority/due/section
+      // changes too is real, separate follow-up work, not attempted here;
+      // promoting a tree that silently drops a real edit the user made
+      // would be worse than not promoting at all, the same fail-closed
+      // posture the warnings check just below already takes on a content
+      // edit or removal it cannot locate.
+      const hasUnreplayableEdits =
+        (afterData.edits.priorityEdits || []).length > 0 ||
+        (afterData.edits.dueEdits || []).length > 0 ||
+        (afterData.edits.sectionEdits || []).length > 0;
+      if (hasUnreplayableEdits) {
+        await logPipelineLearning({
+          kind: 'flagged',
+          uid,
+          traceId,
+          summary: `Not auto-promoted (priority, due, or section-membership edits cannot be replayed onto the reconstructed tree yet). ${judgeNotes}`
         });
         return;
       }

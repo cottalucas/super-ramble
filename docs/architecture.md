@@ -175,26 +175,57 @@ entry.
 - `createdAt`: server timestamp
 - `outcome`: `"pending" | "confirmed" | "cancelled" | "confirmed_with_edits"`
 - `outcomeAt`: server timestamp | null
-- `edits`: `{ removedTasks: { content: string, priority: number, sectionRef: string | null }[], projectNameChange: { from: string, to: string } | null, contentEdits: { originalContent: string, newContent: string }[] } | undefined`
+- `edits`: `{ removedTasks: { content: string, priority: number, sectionRef: string | null }[], projectNameChange: { from: string, to: string } | null, contentEdits: { originalContent: string, newContent: string }[], priorityEdits: { ref: string, from: number, to: number }[], dueEdits: { ref: string, from: string | null, to: string | null }[], sectionEdits: { ref: string, from: string | null, to: string | null }[] } | undefined`
   (present only when `outcome` is `"confirmed_with_edits"`, absent on every
   other outcome, never `null`). `response` above is always the model's real,
   untouched output; `edits` is the separate record of what the user actually
-  changed in `SuperRambleModal.jsx`'s preview before Confirm (per-task
-  removal, an inline project-name edit, per-task content edits, the one
-  editable slice of the preview this pass built; priority, dates, and
-  section membership are not editable there yet). The two together mean the
-  original proposal and the human correction on top of it are both on the
-  trace, not just the corrected result: `removedTasks` carries what a
-  removed task looked like at the moment it was removed (its current
-  content if it had already been edited, its real priority and section),
-  `contentEdits` carries only edits that actually changed a value, an edit
-  typed back to its original content is not reported. Written once, at
-  Confirm, by the same `POST /api/structure/outcome` call every outcome
-  already used; shape-checked by `isValidEdits` (`functions/index.js`)
-  before ever reaching Firestore, since this is the one field on this
-  collection a client actually writes content into, not just an enum
-  value. See `docs/llm-pipeline.md`'s "Live capture and the eval flywheel"
-  section and the resolution log's editable-preview entry.
+  changed in `SuperRambleModal.jsx`'s preview before Confirm. **Priority,
+  due date, and section membership are editable there now**, alongside the
+  original per-task removal, inline project-name edit, and per-task content
+  edits: each of the three new kinds reuses `updateTaskAtRef`
+  (`src/pipeline/write.js`), already generic enough to apply any field-level
+  update, not a second update mechanism. `priorityEdits`/`dueEdits`/
+  `sectionEdits` are keyed by `ref` (one of `flattenTasks`'s own refs,
+  `t{i}`/`t{i}s{j}`), unlike `contentEdits`, which is matched by its own
+  `originalContent` string instead; a due edit's `from`/`to` are always the
+  plain raw due string (or `null`), never the store's parsed `{ date,
+  datetime, string, isRecurring }` shape, the same value that actually lands
+  in `edited.tasks[].due` and flows through `toDue()` unchanged at
+  Confirm-time. The two together (`response` and `edits`) mean the original
+  proposal and the human correction on top of it are both on the trace, not
+  just the corrected result: `removedTasks` carries what a removed task
+  looked like at the moment it was removed (its current content if it had
+  already been edited, its real priority and section), `contentEdits`/
+  `priorityEdits`/`dueEdits`/`sectionEdits` each carry only entries that
+  actually changed a value, an edit clicked or typed back to its starting
+  value is not reported. Written once, at Confirm, by the same `POST
+  /api/structure/outcome` call every outcome already used; shape-checked by
+  `isValidEdits` (`functions/index.js`) before ever reaching Firestore,
+  since this is the one field on this collection a client actually writes
+  content into, not just an enum value. **`gradeStructureTrace`'s
+  auto-promotion path does not attempt to replay `priorityEdits`/
+  `dueEdits`/`sectionEdits`**: `reconstructCorrectedTree` only ever replays
+  `contentEdits`, `removedTasks`, and `projectNameChange` onto the cloned
+  response; when any of the three new arrays is non-empty on a
+  `confirmed_with_edits` trace, auto-promotion is skipped outright and
+  logged to `pipelineLearningLog` instead, the exact same fail-closed
+  posture already documented below for an "edited, then removed" content
+  edit reconstruction cannot locate. Replaying these onto the reconstructed
+  tree is real, separate follow-up work, not attempted this pass. See
+  `docs/llm-pipeline.md`'s "Live capture and the eval flywheel" section and
+  the resolution log's editable-preview entries.
+- `feedback`: `"up" | "down" | null`, default `null`. A thumbs up/down
+  signal on the whole proposal, independent of `outcome`: the preview can
+  send it any time it is showing, whether the user goes on to confirm,
+  confirm with edits, or discard. Written by `POST /api/structure/feedback`
+  (`functions/index.js`), a merge write, no `checkAndReserveLimit`/
+  `logUsage` call (spends no model call, the same reason
+  `/todoist/status`/`/todoist/disconnect` skip it too). A toggle, not an
+  append-only log: a later call simply overwrites the earlier value.
+  **Absent from grading and auto-promotion entirely, this pass, a stated
+  scope boundary, not an oversight**: `gradeStructureTrace` never reads this
+  field. A cheaper, second signal than `outcome`, worth capturing now;
+  wiring it into grading is separate, future work.
 - `traceWriteFailed`: boolean, present and `true` only on a fallback marker
   (see below); absent on every normal trace document
 - `errorCode`, `errorMessage`: string | null. `errorCode` is only ever set
@@ -429,11 +460,17 @@ already shipped once, in the Structure prompt; see the resolution log's
 priority-direction entry and `scripts/eval-todoist.mjs`, which asserts the
 direction deterministically, no live call needed.
 
-**Due dates pass through unparsed.** This app currently carries `due` as a
-natural-language string fallback (`due.string`; no date parser exists yet,
-`docs/llm-pipeline.md`). Todoist's own API accepts a natural-language string
-on `item_add` and parses it server-side, so the model's raw string is passed
-straight through, unmodified. The exact field shape is a nested
+**The Todoist push still passes `due.string` through unparsed, on purpose,
+distinct from the local store's own due below.** `toDue()`
+(`src/pipeline/write.js`) now runs the model's raw due string through
+chrono-node before it reaches the local store (see docs/llm-pipeline.md's
+Stage 3, and "Natural-language date parsing" below), so a Structure-created
+task buckets into Today/Upcoming like any other task. The Todoist push is
+unaffected by that parsing: Todoist's own API already accepts a
+natural-language string on `item_add` and parses it server-side itself, so
+`functions/todoist.js` still only ever reads `t.due.string` (never `date`
+or `datetime`) and forwards the model's raw string straight through,
+unmodified, exactly as before. The exact field shape is a nested
 `due: { string: "..." }` object, not a flat `due_string` key: the first
 draft of this got that wrong, following a docs summary that flattened it,
 and Todoist's own API accepted a flat `due_string` silently ("ok" in
@@ -442,6 +479,25 @@ fixed only by a live write against a real account and reading the created
 item back, not by the write call's own success response; see the resolution
 log's Todoist OAuth entry and `scripts/eval-todoist.mjs`, which now asserts
 the nested shape.
+
+**Natural-language date parsing (Write stage).** `toDue(raw)`
+(`src/pipeline/write.js`) parses the model's raw due string with
+`chrono-node` (a real dependency as of this pass, added because hand-rolling
+relative-date parsing correctly is exactly the class of bug this repo has
+already shipped once, the UTC-vs-local-day mismatch `scripts/eval-date.mjs`
+guards against), anchored to the real current moment, local time, not UTC.
+`string` always carries the raw input through verbatim, so the Todoist push
+above keeps working unchanged. `date` is set whenever chrono resolves a
+calendar day; `datetime` only when chrono found a real stated time with its
+own certainty (`isCertain('hour')`), never a midnight or noon default chrono
+guessed in for a phrase with no stated time. `isRecurring` is a separate
+signal from chrono's own date resolution, checked independently against the
+raw text ("every," "each," "daily," "weekly," and similar): "daily" alone
+resolves to no single date at all, but still sets `isRecurring: true`.
+Anything chrono cannot parse at all ("asap," "sometime," an empty string)
+fails closed to the exact prior shape (`date: null, datetime: null, string:
+raw, isRecurring: false`), never throws, never guesses. See
+`scripts/eval-date-parse.mjs` for the full, deterministic coverage.
 
 **Token refresh.** The Todoist app behind `VITE_TODOIST_CLIENT_ID` has
 refresh tokens enabled (the default for a newly-created app): a token
@@ -492,6 +548,7 @@ verifies the Firebase Auth token, reads secrets, enforces per-user daily limits,
 proxies the model and Todoist calls, and logs privacy-safe usage to
 `users/{uid}/llmUsage/{YYYY-MM-DD}`. Endpoints: `POST /api/transcribe`,
 `POST /api/structure`, `POST /api/structure/outcome`,
+`POST /api/structure/feedback`,
 `POST /api/todoist/oauth`, `GET /api/todoist/status`,
 `POST /api/todoist/disconnect`, `GET /api/todoist/projects`,
 `POST /api/todoist/write`.

@@ -257,6 +257,23 @@ Runs only on explicit user confirm. Translates the validated response into a
 through unchanged, `src/pipeline/write.js`'s `toProjectTree`). Never writes
 without confirmation. A pure function, no model call.
 
+**The model's raw due string is now really parsed here, not just carried
+through.** `toDue(raw)` runs it through `chrono-node`, anchored to the real
+current moment in local time: `date` is set whenever chrono resolves a
+calendar day, so a Structure-created task now buckets into Today and
+Upcoming like any other task (`src/lib/date.js`'s `isToday`/`isOverdue`
+key off exactly that field); `datetime` is set only when chrono found a
+real stated time with its own certainty, never a guessed default;
+`isRecurring` is checked independently of chrono's own date resolution,
+against the raw text itself, since chrono exposes no first-class recurring
+signal (see `docs/architecture.md`'s "Natural-language date parsing"
+section for the full contract). `string` always still carries the model's
+raw text through verbatim, unaffected, so the Todoist push's own
+`due.string` read below is untouched. Anything chrono cannot parse at all
+fails closed to the same shape this returned before this pass (`date: null,
+datetime: null, string: raw, isRecurring: false`), never a throw, never a
+guess. See `scripts/eval-date-parse.mjs`.
+
 As of phase 3, part 8, a confident new-project proposal (`decision ===
 "project"`, no `targetProjectId`) can also, on an explicit per-ramble
 toggle defaulted off, write the exact same tree into the user's real
@@ -336,33 +353,46 @@ Every promoted fixture still has to pass `validateStructure` and the
 grounding guard before it can be written; promoting a trace is not a way
 around the contract, only a source of real cases for it.
 
-**The preview is editable before Confirm, as of this pass.**
-`SuperRambleModal.jsx` seeds an in-memory working copy of the validated
-response (`TaskRow`'s `editable` prop, the sibling of the older, still-used
-`readOnly` mode) the moment structuring succeeds, and every edit mutates
-only that copy: per-task removal (a sub-task's own children go with it,
-since they live nested inside it), an inline project-name edit, and
-per-task content edits. Priority, due dates, and section membership are not
-editable in the preview yet, each its own bigger lift; removing a section
-itself is not supported either, only the tasks inside one. `src/pipeline/
-write.js`'s `toProjectTree` needed no changes to honor this: it already
-only ever reads whatever `tasks`/`project` it is handed, so passing the
-edited copy instead of the original response at Confirm just works,
-verified directly (a removed task's content is asserted absent from the
-produced tree, not assumed; see "Eval assertions per stage" above).
-`structured` (the model's real, untouched output) is never mutated and is
-exactly what got persisted to the trace at request time already; editing
-the preview only changes what Confirm actually writes and what the outcome
-POST below reports about it.
+**The preview is editable before Confirm.** `SuperRambleModal.jsx` seeds an
+in-memory working copy of the validated response (`TaskRow`'s `editable`
+prop, the sibling of the older, still-used `readOnly` mode) the moment
+structuring succeeds, and every edit mutates only that copy: per-task
+removal (a sub-task's own children go with it, since they live nested
+inside it), an inline project-name edit, per-task content edits, and, as of
+this pass, per-task priority, due date, and section membership too. Each of
+the three new edit kinds reuses `updateTaskAtRef` (`src/pipeline/write.js`),
+the same generic ref-keyed updater the original three edit kinds already
+used, not a second update mechanism: a priority trigger reuses
+`PriorityPicker.jsx`'s existing `{ value, onChange }` shape directly; a due
+trigger reuses `DatePicker.jsx`, but reads only its `date` back out as a
+plain ISO string (or `null`), not the store's full `{ date, datetime,
+string, isRecurring }` shape, so the edited value flows straight through
+`toDue()` (this same file's Stage 3 section, above) unchanged at
+Confirm-time, no second due-shape needed anywhere in the preview; a section
+trigger is a small new local picker over the response's own local
+`sections` (by `ref`) plus "No section," root tasks only (a sub-task has no
+`sectionRef` of its own in this contract). Removing a section itself is
+still not supported, only the tasks inside one. `src/pipeline/write.js`'s
+`toProjectTree` needed no changes to honor any of this: it already only
+ever reads whatever `tasks`/`project` it is handed, so passing the edited
+copy instead of the original response at Confirm just works, verified
+directly (a removed task's content is asserted absent from the produced
+tree, not assumed; see "Eval assertions per stage" above). `structured`
+(the model's real, untouched output) is never mutated and is exactly what
+got persisted to the trace at request time already; editing the preview
+only changes what Confirm actually writes and what the outcome POST below
+reports about it.
 
-That makes the outcome three real states now, not two:
-`"confirmed_with_edits"` (`docs/architecture.md`'s `structureTraces` field
-list has the full `edits` shape) sits alongside `"confirmed"` and
+That makes the outcome three real states, not two: `"confirmed_with_edits"`
+(`docs/architecture.md`'s `structureTraces` field list has the full `edits`
+shape, now six arrays/objects, not three) sits alongside `"confirmed"` and
 `"cancelled"`, sent whenever at least one removal, a real content edit (one
 that actually changed a value; typing something back to its original
-content is not reported), or a project-rename survived to the Confirm
-click. A plain confirm with no edits still sends exactly the two-field POST
-it always has; `edits` is never sent for `"confirmed"` or `"cancelled"`.
+content is not reported, the same rule the three new edit kinds also
+follow), a project-rename, or a real priority/due/section-membership change
+survived to the Confirm click. A plain confirm with no edits still sends
+exactly the two-field POST it always has; `edits` is never sent for
+`"confirmed"` or `"cancelled"`.
 
 ### Automatic grading
 
@@ -427,9 +457,10 @@ write past that deletes the oldest auto-promoted one, never a seed.
 **Reconstruction is honest about what it can and cannot do, and this is a
 real, documented limitation, not an oversight.** `structureTraces` only
 ever persists `response` (the model's real, untouched output) and `edits`
-(a diff: `removedTasks`, `contentEdits`, `projectNameChange`), never a
-second full corrected tree, so the corrected tree has to be replayed onto
-a clone of `response`. Content edits are always reliable:
+(a diff: `removedTasks`, `contentEdits`, `projectNameChange`, and, as of
+this pass, `priorityEdits`/`dueEdits`/`sectionEdits`), never a second full
+corrected tree, so the corrected tree has to be replayed onto a clone of
+`response`. Content edits are always reliable:
 `contentEdits[].originalContent` is captured client-side on the first edit
 to a task, before any change, so it always matches the pristine response.
 Removals are reliable in the common case, a task removed without ever
@@ -446,6 +477,21 @@ skipped outright, even with two agreeing signals: a reference example has
 to stay generic and reusable across any future call, never tied to one
 real historical Firestore id, the same reason the four original seed
 examples all have `targetProjectId: null` to begin with, not by accident.
+
+**`priorityEdits`/`dueEdits`/`sectionEdits` are not replayed at all, this
+pass, a stated scope boundary, not an oversight.** `reconstructCorrectedTree`
+only ever applies `contentEdits`, `removedTasks`, and `projectNameChange`
+onto the cloned response. When a `confirmed_with_edits` trace's `edits`
+carries any of the three newer arrays, `gradeStructureTrace` skips
+auto-promotion outright before ever calling `reconstructCorrectedTree`,
+the same "do not guess" posture the removedTasks-miss case above already
+takes: a reference example silently missing a real priority, date, or
+section correction the user actually made would teach the live model the
+model's own original, uncorrected value, worse than not promoting at all.
+Replaying these three onto the reconstructed tree is real, separate,
+future work; until then a trace with any of them logs to
+`pipelineLearningLog` for the monthly human review instead, same as any
+other flagged case below.
 
 Every other flagged case, cancelled, a plain confirm the grader still
 flagged, or a confirmed-with-edits trace where auto-promotion could not be

@@ -1684,15 +1684,57 @@ textarea:focus {
   }
 }
 
+/* The pinned raw-input snippet: a small muted box, not a second primary
+   element competing with .sr-reasoning below it. white-space/overflow are a
+   defensive backup; truncateSnippet() (SuperRambleModal.jsx) already
+   collapses and truncates the text itself, title carries the full text as
+   a native tooltip. */
+.sr-transcript-snippet {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--ds-ink) 4%, transparent);
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .sr-reasoning {
   color: var(--ds-ink);
   margin: 0 0 4px;
 }
 
+.sr-task-count,
 .sr-confidence {
   color: var(--ds-ink-soft);
   font-size: 12px;
   margin: 0 0 14px;
+}
+
+/* Confidence and the thumbs feedback row share one line; the row itself
+   carries the bottom margin .sr-confidence normally carries alone, so
+   wrapping it here does not double up the gap before whatever follows. */
+.sr-confidence-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 14px;
+}
+
+.sr-confidence-row .sr-confidence {
+  margin: 0;
+}
+
+.sr-feedback {
+  display: flex;
+  gap: 2px;
+}
+
+.sr-feedback-selected {
+  color: var(--ds-red);
+  background: color-mix(in srgb, var(--ds-red) 10%, transparent);
 }
 
 .sr-clarify {
@@ -1729,6 +1771,19 @@ textarea:focus {
   font-size: 14px;
   font-family: inherit;
   padding: 0;
+}
+
+/* Editable preview: priority, due date, and section-membership triggers,
+   one row of the same .chip controls Quick-add and Task detail already use.
+   Always visible, not hover-revealed like .task-row-actions: these are
+   primary editing controls the whole preview exists for ("click any task
+   to edit"), not a secondary row action. */
+.task-edit-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 /* The Todoist push toggle, new-project preview only. Sits left of the
