@@ -7,8 +7,8 @@ import { structureTranscript, ContractError } from '../pipeline/structure.js';
 import { toProjectTree, flattenTasks, toDue, updateTaskAtRef } from '../pipeline/write.js';
 import { getAuthToken } from '../lib/authToken.js';
 import { createTodoistClient } from '../todoist/index.js';
-import { colorHex } from '../lib/colors.js';
-import TaskRow, { buildChildrenMap } from './TaskRow.jsx';
+import { COLOR_NAMES } from '../lib/colors.js';
+import TaskRow, { buildChildrenMap, ProjectLabel } from './TaskRow.jsx';
 import VoiceRecorder from './VoiceRecorder.jsx';
 import { IconThumbsUp, IconThumbsDown } from './Icons.jsx';
 
@@ -148,6 +148,7 @@ function TreePreview({
                 onToggleExpand={onToggleExpand}
                 showProject={Boolean(previewProject)}
                 project={previewProject}
+                projectIndicator="hash"
               />
             ))}
           </div>
@@ -169,6 +170,7 @@ function TreePreview({
           onSectionChange={onSectionChange}
           showProject={Boolean(previewProject)}
           project={previewProject}
+          projectIndicator="hash"
           expandedTaskId={expandedTaskId}
           onToggleExpand={onToggleExpand}
         />
@@ -206,6 +208,7 @@ function TreePreview({
               onToggleExpand={onToggleExpand}
               showProject={Boolean(inboxProject)}
               project={inboxProject}
+              projectIndicator="hash"
             />
           ))}
         </div>
@@ -954,13 +957,37 @@ export default function SuperRambleModal({ onClose }) {
               // reused for every row's own `.meta-project` chip (collapsed)
               // and `.task-edit-footer-project` fallback (expanded, when
               // there's no section to show instead), one resolution, not
-              // two, docs/resolution-log.md, 2026-07-17 round 2. `null` for
-              // the new-project case on purpose: there is no real project
-              // entity yet (no color, the name is still editable), and the
-              // header's own "Suggested project name" already covers that
-              // case unambiguously, so a per-row chip there would have
-              // nothing real to show.
-              const previewProject = targetProject || (isLooseTasks ? projects.find((p) => p.id === inboxId) : null);
+              // two, docs/resolution-log.md, 2026-07-17 round 2.
+              //
+              // **Reversed, docs/resolution-log.md's Todoist-Text-Scan-parity
+              // pass: the new-project case now gets a real chip too, not
+              // `null`.** The 2026-07-17 "six scoped fixes" entry (item 5's
+              // "Known, deliberate edge case") deliberately left this `null`
+              // for `isNewProject`, reasoning that inventing a stand-in for a
+              // project that doesn't exist yet as a real entity would be
+              // scope creep, and that the header's own "Suggested project
+              // name" already covered it elsewhere on screen. Requested
+              // directly, reopened on purpose: every row should show its
+              // destination, consistently, the same bar every other routing
+              // outcome here already meets. `{ name, color, isInbox: false }`
+              // is a lightweight, never-persisted stand-in, never written
+              // anywhere, not the same thing as inventing a real project
+              // early: `color` is `COLOR_NAMES[0]`, the exact default
+              // `AddProjectModal.jsx` itself seeds a brand-new project's own
+              // color picker with, so the chip matches what the project
+              // would actually get if the user never touches that picker,
+              // not an arbitrary guess. `name` reads `edited.project.name`,
+              // the live, editable value, not `structured.project.name`, so
+              // renaming the project in the header updates every row's chip
+              // too, the same "state what Confirm will actually write"
+              // discipline this preview already follows everywhere else.
+              const previewProject = targetProject
+                ? targetProject
+                : isLooseTasks
+                  ? projects.find((p) => p.id === inboxId)
+                  : isNewProject
+                    ? { name: edited.project?.name || structured.project.name, color: COLOR_NAMES[0], isInbox: false }
+                    : null;
               // The real Inbox project, resolved once regardless of where
               // the rest of this response routes: a standalone task always
               // lands there (src/pipeline/write.js's toProjectTree), even
@@ -1030,10 +1057,7 @@ export default function SuperRambleModal({ onClose }) {
                       <>
                         <span className="sr-project-name-label">Adding to existing project</span>
                         <div className="sr-project-name-value">
-                          <span className="project-hash" style={{ color: colorHex(targetProject.color) }}>
-                            #
-                          </span>
-                          {targetProject.name}
+                          <ProjectLabel project={targetProject} />
                         </div>
                       </>
                     ) : isLooseTasks ? (

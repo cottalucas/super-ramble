@@ -1,11 +1,38 @@
 import { useState } from 'react';
 import PriorityPicker, { priorityClass } from './PriorityPicker.jsx';
 import DatePicker from './DatePicker.jsx';
-import { IconCheck, IconCaret, IconPlus, IconHash, IconDots, IconX } from './Icons.jsx';
+import { IconCheck, IconCaret, IconPlus, IconHash, IconDots, IconX, IconInbox } from './Icons.jsx';
 import Popover from './Popover.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import { dueMeta, isOverdue } from '../lib/date.js';
 import { colorHex } from '../lib/colors.js';
+
+// The project identity shown next to a task, shared by both `.meta-project`
+// (collapsed) and `.task-edit-footer-project` (expanded) below, and by
+// `SuperRambleModal.jsx`'s own three-way header for its "existing project"
+// state: one small render, not three copies of the same branch. Real
+// Todoist's own sidebar convention (docs/design-system.md's "Sidebar project
+// list" section): the colored "#" hash for a real project, matching
+// `.project-hash`'s own styling, never a filled dot here; Inbox gets its own
+// icon instead of any colored mark at all, the same way `Sidebar.jsx`'s own
+// Inbox nav row uses `IconInbox` plus the word "Inbox," not a hash. Exported
+// so `SuperRambleModal.jsx` can reuse it directly rather than re-deriving the
+// same two-way branch a second time.
+export function ProjectLabel({ project }) {
+  return project.isInbox ? (
+    <>
+      <IconInbox width={14} height={14} className="icon" />
+      {project.name}
+    </>
+  ) : (
+    <>
+      <span className="project-hash" style={{ color: colorHex(project.color) }}>
+        #
+      </span>
+      {project.name}
+    </>
+  );
+}
 
 // A section-ref picker for the editable preview only: a small list of the
 // response's own local sections (by ref, not a real Firestore id) plus "No
@@ -153,6 +180,13 @@ export default function TaskRow({
   childrenOf,
   showProject = false,
   project,
+  // 'dot' (default) is this app's general convention (docs/design-system.md's
+  // "Sidebar project list" section): a colored filled circle everywhere a
+  // task shows its project, matching real Todoist's own task-row treatment.
+  // 'hash' is a scoped exception, only ever passed by SuperRambleModal.jsx's
+  // own preview rows, matching real Todoist's Text Scan preview instead: see
+  // `ProjectLabel` above.
+  projectIndicator = 'dot',
   onComplete,
   onAddSub,
   onDelete,
@@ -279,8 +313,14 @@ export default function TaskRow({
                     <SectionRefPicker sections={sections} value={task.sectionId} onChange={(ref) => onSectionChange(task, ref)} />
                   ) : project ? (
                     <span className="task-edit-footer-project">
-                      <span className="project-dot" style={{ background: colorHex(project.color), width: 8, height: 8 }} />
-                      {project.name}
+                      {projectIndicator === 'hash' ? (
+                        <ProjectLabel project={project} />
+                      ) : (
+                        <>
+                          <span className="project-dot" style={{ background: colorHex(project.color), width: 8, height: 8 }} />
+                          {project.name}
+                        </>
+                      )}
                     </span>
                   ) : null}
                 </div>
@@ -316,8 +356,14 @@ export default function TaskRow({
               ))}
               {showProject && project ? (
                 <span className="meta-project">
-                  <span className="project-dot" style={{ background: colorHex(project.color), width: 8, height: 8 }} />
-                  {project.name}
+                  {projectIndicator === 'hash' ? (
+                    <ProjectLabel project={project} />
+                  ) : (
+                    <>
+                      <span className="project-dot" style={{ background: colorHex(project.color), width: 8, height: 8 }} />
+                      {project.name}
+                    </>
+                  )}
                 </span>
               ) : null}
             </div>
@@ -403,6 +449,7 @@ export default function TaskRow({
               childrenOf={childrenOf}
               showProject={showProject}
               project={project}
+              projectIndicator={projectIndicator}
               onComplete={onComplete}
               onAddSub={onAddSub}
               onDelete={onDelete}

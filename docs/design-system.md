@@ -343,15 +343,55 @@ identical input:
   resolved once (`inboxProject`, a new prop threaded alongside
   `previewProject`) as their own `project`/`showProject`, regardless of
   what `previewProject` resolves to elsewhere on the same response (a
-  different existing project, `null` for the new-project case, or already
-  Inbox itself for a loose-tasks response): a standalone task always lands
-  in Inbox specifically. Its edit card's own `SectionRefPicker` is
-  deliberately not shown (an empty `sections` list is passed for this group
-  only, so `TaskRow`'s footer falls back to a plain project label instead):
-  a standalone task's `sectionRef` is forced null on Write regardless of
+  different existing project, a tentative stand-in for the new-project case
+  as of the per-row-indicator pass below, or already Inbox itself for a
+  loose-tasks response): a standalone task always lands in Inbox
+  specifically. Its edit card's own `SectionRefPicker` is deliberately not
+  shown (an empty `sections` list is passed for this group only, so
+  `TaskRow`'s footer falls back to a plain project label instead): a
+  standalone task's `sectionRef` is forced null on Write regardless of
   anything picked here, so a working picker would be a dead control, the
   anti-pattern checklist's own rule. See `docs/resolution-log.md` for the
   date this landed.
+- **Every row shows its destination with the "#" hash, never the dot, and
+  Inbox shows as Inbox, not a colored mark of any kind** (`docs/resolution-log.md`,
+  the Todoist-Text-Scan-parity pass): closes a gap found comparing this
+  preview against real Todoist's own Text Scan, which labels every row
+  consistently. `TaskRow.jsx` gains a `projectIndicator` prop, `'dot'`
+  (default, every existing caller unchanged: Inbox, Today, Upcoming,
+  Project, `TaskDetail.jsx`'s sub-tasks, all still the colored
+  `.project-dot`, docs/design-system.md's "Sidebar project list" section's
+  general rule is **not** reversed app-wide) or `'hash'`, passed only by
+  `SuperRambleModal.jsx`'s own preview rows. `'hash'` renders `ProjectLabel`
+  (`TaskRow.jsx`, exported, also reused by the three-way header's own
+  "existing project" state instead of that state re-deriving the same
+  markup a second time): a real project shows the colored `.project-hash`
+  glyph, matching this section's own three-way-header bullet above; Inbox
+  shows `IconInbox` instead, no colored mark at all, the same precedent
+  `Sidebar.jsx`'s own Inbox nav row already set (icon plus the word "Inbox,"
+  never a hash or dot for Inbox specifically).
+  **Reverses a named prior decision, stated so a future pass does not "fix"
+  it back**: the 2026-07-17 "six scoped fixes" entry's item 5 ("Known,
+  deliberate edge case") deliberately left `previewProject` `null` for the
+  new-project case, reasoning that a stand-in for a project that doesn't
+  exist yet would be scope creep and that the header's own "Suggested
+  project name" already covered it elsewhere on screen. Requested directly
+  this pass: every row should show its destination, consistently, including
+  a brand-new project's own rows. `previewProject` now resolves to
+  `{ name: edited.project.name, color: COLOR_NAMES[0], isInbox: false }`
+  for the new-project case, a lightweight, never-persisted stand-in, never
+  written anywhere. `color` is `COLOR_NAMES[0]` (`src/lib/colors.js`), the
+  exact default `AddProjectModal.jsx` itself seeds a brand-new project's own
+  color picker with, so the chip matches what the project would actually
+  get if the user never touches that picker, not an arbitrary guess. `name`
+  reads the live `edited.project.name`, not the model's original
+  `structured.project.name`, so renaming the project in the header updates
+  every row's chip too, the same "state what Confirm will actually write"
+  discipline this preview already follows everywhere else. This also
+  retires the "empty footer-left is possible" edge case that same prior
+  entry documented: a section-less root task (or any sub-task) in a
+  brand-new project now always has a real fallback to show in
+  `.task-edit-footer-left`, the project chip, instead of nothing.
 - **A pinned transcript snippet and a task-count line**, both at the top of
   the preview, above the reasoning/confidence line: `.sr-transcript-snippet`
   is a small muted box (`--ds-ink-soft`, a light background tint, not a

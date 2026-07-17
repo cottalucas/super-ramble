@@ -3,6 +3,99 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-17 (fifth round): Every Super Ramble preview row shows its destination with the "#" hash, Inbox shows as Inbox, closing a Text-Scan-parity gap
+
+Read `docs/orchestration.md`, the full `docs/` set, and the prior same-day
+entries below in full before touching `TaskRow.jsx` or `SuperRambleModal.jsx`
+this round too. Requested directly this pass, discussed and confirmed with
+Lucas before building, not a rediscovered bug.
+
+**The gap.** Comparing this app's own preview against real Todoist's Text
+Scan on the same input: every row should show its destination consistently,
+using the "#" hash glyph, and Inbox specifically should show as Inbox, never
+a colored mark of any kind. Before this pass, a preview row used the same
+colored `.project-dot` every other task row in the app uses
+(docs/design-system.md's "Sidebar project list" section, a real,
+screenshot-verified rule, **not reversed app-wide by this pass**: Inbox,
+Today, Upcoming, Project, and `TaskDetail.jsx`'s sub-tasks all still show
+the dot, unchanged). Only the three-way header's own "existing project"
+state had already carved out a hash exception for itself (the 2026-07-17
+entry below); individual rows had not.
+
+**Fix, `TaskRow.jsx`.** A new `projectIndicator` prop, `'dot'` (default, so
+every existing caller needs zero prop changes) or `'hash'`, forwarded
+through the sub-task recursion unchanged. Extracted `ProjectLabel({ project
+})` (exported): a real project renders the colored `.project-hash` glyph
+(`colorHex(project.color)`); `project.isInbox` renders `IconInbox` instead,
+no colored mark at all, matching `Sidebar.jsx`'s own Inbox nav row precedent
+(icon plus the word "Inbox," never a hash or dot for Inbox specifically).
+Both existing `.project-dot` render sites (`.meta-project`, collapsed; the
+`.task-edit-footer-project` fallback, expanded) branch on `projectIndicator`
+now, the dot branch byte-identical to before. `SuperRambleModal.jsx` passes
+`projectIndicator="hash"` on all three `TaskRow` calls in `TreePreview`
+(the sectioned rows, the no-section rows, and the standalone/loose group),
+and reuses `ProjectLabel` for the three-way header's own "existing project"
+state instead of that state re-deriving the same hash markup a second time.
+
+**Reverses a named prior decision, on purpose, not silently.** The
+2026-07-17 "Six scoped fixes to the Super Ramble preview and one global
+checkbox-hover fix" entry below, item 5's "Known, deliberate edge case,"
+left `previewProject` `null` for the new-project case: reasoning at the
+time was that inventing a stand-in for a project that doesn't exist yet as
+a real entity would be scope creep, and that the header's own "Suggested
+project name" label already covered it elsewhere on screen. That reasoning
+is superseded, not wrong for what it was: this pass explicitly asked for
+every row to show its destination, including a brand-new project's own
+rows, a bar the prior pass was never asked to meet. `previewProject` now
+resolves to `{ name: edited.project?.name || structured.project.name,
+color: COLOR_NAMES[0], isInbox: false }` for the new-project case, a
+lightweight, never-persisted stand-in, never written anywhere Confirm
+actually writes to. `color` is `COLOR_NAMES[0]` (`src/lib/colors.js`), the
+exact default `AddProjectModal.jsx` itself seeds a brand-new project's own
+color picker with, not an arbitrary guess. `name` reads the live
+`edited.project.name`, not the model's original `structured.project.name`,
+so renaming the project in the header live-updates every row's chip too,
+the same "state what Confirm will actually write" discipline this preview
+already follows everywhere else. This also retires the "empty footer-left
+is possible" edge case that same prior entry documented: a section-less
+root task, or any sub-task, in a brand-new project now always has the
+project chip to fall back on in `.task-edit-footer-left` instead of
+nothing, verified live to coexist correctly with the still-independent
+"Section picker on the left, when there's one to show" behavior.
+
+**Verified live**, `VITE_ENABLE_LOCAL_PREVIEW=true` locally (a temporary
+debug-mock branch in `submit()`, four magic-transcript scenarios, removed
+before committing, never shipped): brand-new project (every row read "#
+Kitchen Remodel," collapsed and expanded, confirmed the color resolves to
+`COLOR_NAMES[0]`'s real hex via `getComputedStyle`); renamed the project in
+the header live and confirmed every row's chip updated immediately;
+existing project (every row read "# Portugal Trip," a real project already
+in the local store, unchanged from before); loose tasks, `decision:
+"tasks"` (every row showed the Inbox icon, no dot or hash); a mixed
+response (a new project's own row showed its tentative hash, its
+standalone row showed the Inbox icon, both in the same preview,
+`"1 task stays loose, added to Inbox"` note still correct above them).
+Confirmed no regression by reading Upcoming with real seeded tasks
+belonging to "Apartment Move": still the colored dot, unchanged. Build
+clean, full `npm run eval` (23 write cases, 21 offline cases, prompt-sync)
+green.
+
+### Decisions not to relitigate
+
+- The "Sidebar project list" section's dot-everywhere-else rule stands.
+  `projectIndicator="hash"` is a scoped exception passed only by
+  `SuperRambleModal.jsx`'s own preview rows; do not pass it from any other
+  caller of `TaskRow` without a new, equally explicit decision.
+- A brand-new project's preview rows show a real, colored chip
+  (`COLOR_NAMES[0]`, the tentative name), not a blank fallback. The
+  2026-07-17 "six scoped fixes" entry's "empty footer-left" edge case no
+  longer applies; do not reintroduce the `null`-`previewProject` behavior
+  for `isNewProject` citing that entry, it is explicitly superseded by this
+  one.
+- `ProjectLabel` lives in `TaskRow.jsx`, not `SuperRambleModal.jsx`: the
+  dependency direction is the general shared component exporting it, the
+  leaf feature file importing it, not the other way around.
+
 ## 2026-07-17 (fourth round): The Super Ramble overlay no longer closes on an outside click, and the loading copy states a shape, not an unproven number
 
 Two small, independent fixes, reported together this round.
