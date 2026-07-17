@@ -22,26 +22,24 @@ import { IconThumbsUp, IconThumbsDown } from './Icons.jsx';
 // writing anything back, docs/architecture.md's structureTraces field list).
 const STRUCTURE_WAIT_TIMEOUT_MS = 240_000;
 
-// Re-run against real Cloud Logging history, 2026-07-17 (see
+// Re-checked against real Cloud Logging history, 2026-07-17 (see
 // docs/resolution-log.md this same date): still only 8 real calls total, all
 // of them the identical test transcript from one 2026-07-14 debugging
 // session (the Hosting-cutoff/timeout diagnostic work, docs/architecture.md),
 // not diverse organic usage. That sample is sharply bimodal, not a smooth
 // distribution: 2 calls at 9.4s/10.2s (under 1000 output tokens), 6 calls at
-// 71-96s (near the 8192 max_tokens cap). The overall p50 across all 8
-// (81.4s) is dragged almost entirely by the 6 slow, near-max-token calls and
-// would still read exactly as "obviously wrong" against a real fast call as
-// the old 82s guess did. P50 here uses the fast bucket instead (p50=9.4s,
-// p90=10.2s), rounded up to a clean 10s, since that is what "usual" actually
-// means for a call that isn't pushing the model to its output ceiling. P90
-// is left at the real near-max-token/overall p90 (96.2s, rounds to 96,
-// unchanged from before) on purpose: a genuinely complex or tangled dump can
-// still land in that bucket, and the existing copy already frames 96s as the
-// complex-dump ceiling, not the usual case. Re-run
+// 71-96s (near the 8192 max_tokens cap). Too thin and too uniform (one
+// transcript, not varied real input) to support a specific percentile claim
+// like "usually under Ns" without it reading as wrong the moment a call runs
+// past it; the loading copy below states the shape of the finding instead
+// (simple dumps are fast, complex ones are slow), which degrades gracefully
+// regardless of how long a given call actually takes. STRUCTURE_P90_SECONDS
+// stays a real number, not copy: it drives the progress bar's own fill
+// percentage, left at the real near-max-token/overall p90 (96.2s, rounds to
+// 96), since a genuinely complex or tangled dump can land there. Re-run
 // `npm run structure:timing-stats` once real, varied (not one repeated test
 // transcript) usage accumulates; docs/roadmap.md's "Next" section already
 // flags this as due for revisiting.
-const STRUCTURE_P50_SECONDS = 10;
 const STRUCTURE_P90_SECONDS = 96;
 
 // TaskList itself was a poor fit for this preview: it hard-wires useData()
@@ -808,14 +806,14 @@ export default function SuperRambleModal({ onClose }) {
   }
 
   return (
-    <div
-      className="overlay"
-      onMouseDown={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (state !== 'loading' && state !== 'recording') onClose();
-        else if (canCloseWhileWaiting) cancelWaiting();
-      }}
-    >
+    <div className="overlay">
+      {/* No onMouseDown-to-close here, unlike this app's other overlays: an
+          in-progress ramble (typed input, a structuring wait, or an
+          unconfirmed proposal) is real, easy-to-lose work, so an accidental
+          outside click must never discard it. The view persists until the
+          user picks one of this modal's own explicit exits: Cancel, Discard,
+          Confirm, or the Escape handler above (onKey), never a stray click
+          on the backdrop. */}
       <div className="modal modal-super-ramble" role="dialog" aria-label="Super Ramble">
         {state === 'input' || state === 'recording' ? (
           <>
@@ -874,7 +872,7 @@ export default function SuperRambleModal({ onClose }) {
                     />
                   </div>
                   <p className="sr-loading-elapsed">
-                    {waitingElapsedSec}s elapsed, usually under {STRUCTURE_P50_SECONDS}s.
+                    {waitingElapsedSec}s elapsed, complex or tangled dumps can take a minute or more.
                   </p>
                 </>
               ) : null}

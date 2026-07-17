@@ -385,6 +385,19 @@ identical input:
   quiet toast (`flash`), not a blocking error state, since this is a real
   signal worth knowing didn't land, not pure background telemetry the way
   the outcome POST's own silent-swallow is.
+- **The overlay does not close on an outside click**, a deliberate,
+  named exception to every other modal's `onMouseDown={(e) => e.target ===
+  e.currentTarget && onClose()}` convention (`AddProjectModal.jsx`,
+  `ConfirmDialog.jsx`, `QuickAddModal.jsx`, `SettingsModal.jsx`,
+  `TaskDetail.jsx` all still close that way). A typed ramble, a
+  structuring wait, or an unconfirmed proposal is real, easy-to-lose work,
+  so a stray click on the backdrop must never discard it. The view
+  persists through every state (`input`, `recording`, `loading`,
+  `preview`, `error`) until the user picks one of this modal's own
+  explicit exits: Cancel, Discard, Confirm, or Escape (the existing
+  `onKey` handler, unchanged, still closes or cancels exactly as before).
+  Do not add outside-click-to-close back to this modal without a new,
+  equally explicit decision.
 
 ## Responsive
 
