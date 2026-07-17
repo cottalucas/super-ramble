@@ -80,9 +80,11 @@ Classify and Structure are one combined call, not two.
    and natural-language due strings. A separate `needsClarification` axis is
    reserved for routing uncertainty only (does this belong to an existing
    project, or is it new), never for uncertainty about whether the content
-   is project-shaped. Runs on Claude Sonnet, temperature 0, a deliberate,
-   named exception to every other call's Haiku default, because structuring
-   quality is the whole product.
+   is project-shaped. Runs on Claude Sonnet, a deliberate, named exception to
+   every other call's Haiku default, because structuring quality is the
+   whole product. No temperature is set on this call; the pinned model,
+   `claude-sonnet-5`, rejects the parameter outright, the same as every
+   other call here on the Haiku default.
 3. **Write.** Runs only on explicit user confirm. A pure function, no model
    call: translates the validated Structure response into
    `store.createProjectTree`, flattening nested sub-tasks into sibling

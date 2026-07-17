@@ -1,13 +1,16 @@
-// Client-side AES-GCM encrypt/decrypt seam.
+// Client-side AES-GCM encrypt/decrypt seam. Not yet wired into store/.
 //
-// Personal free text (transcripts, task contents, project names) is encrypted
-// in the browser before any Firestore write, and decrypted only in the browser
-// after read. The server and the database never hold plaintext personal data.
-// See docs/architecture.md (privacy posture).
+// The intent: personal free text (transcripts, task contents, project names)
+// encrypted in the browser before any Firestore write, decrypted only in the
+// browser after read, so the server and the database never hold plaintext
+// personal data. That is not true today; the store writes task and project
+// text as plaintext to Firestore. See README's Privacy section and
+// docs/architecture.md.
 //
-// The key derivation/management strategy (per-user key, where it lives, how it
-// is unlocked) is a Next item. This module exposes the stable shape the store
-// depends on so the rest of the app can be built against it now.
+// This module is the stable encrypt/decrypt shape the store will depend on
+// once wired in. Key derivation and storage (per-user key, where it lives,
+// how it is unlocked) are still open, and wiring this into the write path is
+// separate, larger work, not attempted here.
 
 const SUBTLE = globalThis.crypto?.subtle;
 

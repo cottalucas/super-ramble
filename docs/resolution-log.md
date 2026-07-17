@@ -3,6 +3,94 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-17 (seventh round): Two doc coherence bugs fixed, found during a pre external-review documentation audit, not a live bug report
+
+Read the full `docs/` set per `docs/orchestration.md`'s loop ahead of an
+external review, cross-checking every doc against every other doc and
+against the code, looking for exactly this class of drift: a claim one doc
+already corrected that a sibling doc or a code comment still contradicts.
+Found two, both stale claims a prior pass had already corrected in one place
+but not the others.
+
+**Bug 1: README.md still claimed temperature 0 for Structure.** Line 83 read
+"Runs on Claude Sonnet, temperature 0, a deliberate, named exception to
+every other call's Haiku default." `docs/llm-pipeline.md`'s Stage 2 section
+already carries the corrected fact, from the 2026-07-14 incident: the pinned
+model, `claude-sonnet-5`, rejects `temperature` outright (a live `400`,
+`"temperature" is deprecated for this model"`), so the real live call has
+never set it and cannot without breaking every request (see that date's two
+resolution log entries, "Incident: `temperature: 0` broke every real
+`/structure` call within a minute of deploy. Reverted" and "The
+complex-transcript 502 root-caused..."). README's own line was simply never
+updated when that incident landed; this pass brought it in line with what
+`docs/llm-pipeline.md` already correctly says: Sonnet, no temperature set,
+the same as the Haiku-default calls, not a `temperature: 0` exception. Not
+relitigated: whether temperature should be set. It should not, per the
+2026-07-14 entries; only the wording changed.
+
+**Bug 2: `docs/architecture.md` and `src/lib/crypto.js`'s header comment both
+still claimed personal task text is already encrypted client-side.** Neither
+is true today. Verified directly: `encryptString`, `decryptString`, and
+`generateKey` are defined in `src/lib/crypto.js` and have zero importers
+anywhere else in the codebase; neither store adapter
+(`src/store/firestore-store.js`, `src/store/local-store.js`) calls them.
+README's own Privacy section has had this right since the 2026-07-04 "Docs
+and code audit" entry, which caught and fixed this exact overclaim in
+README at the time ("Today the store writes task and project text as
+plaintext to Firestore"), but that correction never propagated to the two
+other places making the same claim:
+
+- `docs/architecture.md`'s `todoistAuth` passage (the data model section)
+  reworded to state `crypto.js` is a seam, not yet wired into the write
+  path, matching README's Privacy section and the 2026-07-04 entry's own
+  language. The actual point the passage makes, why `todoistAuth` can't get
+  the same treatment even once the seam is wired in (the Function has to
+  read the Todoist token in plaintext to call Todoist on the user's behalf,
+  unlike task text, which only the browser ever needs to read back), is
+  unchanged.
+- `src/lib/crypto.js`'s top comment reworded out of present tense. It no
+  longer claims this already happens; it states what it actually is: the
+  stable AES-GCM encrypt/decrypt shape the store will depend on once wired,
+  key derivation and storage still open, per README's Privacy section.
+
+Not touched: the actual `encryptString`/`decryptString`/`generateKey`
+implementations. This was a comment and doc wording fix only, not a wiring
+pass; wiring encryption into the write path is separate, larger, out-of-scope
+work, already named as such in README's Privacy section.
+
+**Verified.** `npm run build` clean. `npm run eval`, all suites green
+(offline, date, Todoist, write, prompt-sync). `node scripts/check-secrets.mjs`
+clean. Since this touches only `README.md`, `docs/architecture.md`, and one
+comment block in `src/lib/crypto.js` (a file with zero importers), confirmed
+with a bundle grep, the same verification the 2026-07-13 reference-examples
+entry already modeled: rebuilt `dist/` and grepped it for the changed
+comment/doc text ("gets client-side encryption", "is encrypted in the
+browser", "AES-GCM", "encryptString", "decryptString", "generateKey",
+"crypto.js") and for the module itself; none of it appears in the built
+bundle, consistent with `crypto.js` having zero importers. **Hosting and
+Functions were not redeployed**, on the strength of that same grep: neither
+`README.md` nor `docs/architecture.md` is part of any build, and
+`src/lib/crypto.js`'s comment change cannot reach a bundle it was already
+confirmed absent from. No code path, client or server, behaves differently
+after this pass.
+
+### Decisions not to relitigate
+
+- README's "temperature 0" line is gone for good reason: `claude-sonnet-5`
+  rejects the parameter outright. Do not reintroduce it without first
+  confirming acceptance against a real request to that exact model id
+  (Workbench, not production), per the 2026-07-14 entries.
+- `src/lib/crypto.js` is a real, working, but entirely unwired seam.
+  Nowhere in `docs/` should say personal task text is encrypted today;
+  README's Privacy section is the one place that states the actual current
+  posture, and every other doc or comment describing this seam should agree
+  with it, not restate the aspirational end state as present fact.
+- A doc correction made in one file does not propagate automatically. When
+  fixing an overclaim, grep for the same claim's other copies
+  (`docs/architecture.md`, code comments) before considering the fix done;
+  this exact gap (README fixed 2026-07-04, two other copies missed) is what
+  this entry closed.
+
 ## 2026-07-17 (sixth round): A real Todoist Text Scan visual pass on the preview, a longer/mentions-standalone reasoning sentence, and a Board drag-indicator fix
 
 Six pieces, reported together this round against real Todoist Text Scan
