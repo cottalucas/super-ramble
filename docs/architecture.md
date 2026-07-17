@@ -130,13 +130,17 @@ expired or within a minute of it, and deleted by `POST /api/todoist/disconnect`.
 Denied to every client read and write in `firestore.rules`. `structureTraces`
 below is no longer denied to a client read the same way, since the
 async-Structure pass (docs/resolution-log.md); `todoistAuth` still is, a
-distinct case for a distinct reason: personal task text gets client-side encryption
-(`src/lib/crypto.js`) before it ever reaches Firestore, so the server never
-needs the plaintext. A Todoist access token can't get that treatment; the
-Function has to read it in plaintext to call Todoist on the user's behalf.
-Only the Function (Admin SDK) ever touches this collection. See
-`docs/roadmap.md` (phase 3, part 8) and the resolution log's Todoist OAuth
-entry.
+distinct case for a distinct reason: personal task text is meant to get
+client-side encryption (`src/lib/crypto.js`, the stable AES-GCM
+encrypt/decrypt seam) before it reaches Firestore, so the server would never
+need the plaintext, but that seam is not yet wired into `store/`; today the
+store writes task and project text as plaintext, same as README's Privacy
+section states. A Todoist access token can't get that treatment even once
+the seam is wired in: the Function has to read it in plaintext to call
+Todoist on the user's behalf, unlike task text, which only the browser ever
+needs to read back. Only the Function (Admin SDK) ever touches this
+collection. See `docs/roadmap.md` (phase 3, part 8) and the resolution log's
+Todoist OAuth entry.
 
 `users/{uid}/structureTraces/{traceId}`
 - `transcript`: string (the raw dump submitted to Structure)
