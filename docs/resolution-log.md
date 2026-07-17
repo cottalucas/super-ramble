@@ -3,6 +3,149 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-17 (sixth round): A real Todoist Text Scan visual pass on the preview, a longer/mentions-standalone reasoning sentence, and a Board drag-indicator fix
+
+Six pieces, reported together this round against real Todoist Text Scan
+reference screenshots plus a live Board drag-and-drop bug.
+
+**1. Loading copy: "inputs," not "dumps."** `{n}s elapsed, complex or
+tangled inputs can take a minute or more.` A plain wording swap on the line
+the fourth-round entry below already rewrote; that reasoning stands
+unchanged.
+
+**2. Reasoning sentence: longer, explains what ties tasks together,
+mentions a standalone task itself.** `SYSTEM_PROMPT` (`src/pipeline/prompt.js`)
+and `STRUCTURE_SYSTEM_PROMPT_RULES` (`functions/index.js`) both loosened
+from "under 20 words, one plain sentence" to "under 40 words, one or two
+plain sentences, still tight, never a paragraph," and both gained an
+instruction to name briefly what actually ties the tasks together (a
+shared goal, a dependency between steps), not just the topic, and to
+mention any `standalone` task in a short added clause. `npm run
+check:prompt-sync` confirms the two copies are still byte-identical.
+Reported directly: the prior "Apartment Move" reasoning example
+("All these tasks tie to one apartment move with dependent steps like
+packing, truck booking, and internet timing.") never mentioned the loose
+milk-and-eggs errand at all, even though the model had already marked it
+`standalone`. `.sr-standalone-note` ("N tasks stay loose, added to Inbox,"
+the fifth-round entry below's own new line) is removed outright, its class
+deleted from `styles.css`: that information now belongs in the reasoning
+sentence itself, not a second line restating it a beat later. The per-row
+"Loose, going to Inbox" group and its Inbox icon (also the fifth-round
+entry) are unchanged, still the deterministic, always-correct signal
+regardless of what the model's own prose says.
+
+**3. An edit-pencil affordance beside the suggested project name.** The
+input was always directly editable by clicking into it; nothing signaled
+that. New `IconEdit` (`Icons.jsx`, a simple pencil path in this app's
+existing icon style) sits inside a new `.sr-project-name-edit` wrapper,
+absolutely positioned against the input's own box (`padding-right: 22px`
+added to the input so typed text never runs under it); clicking it focuses
+the input via a new `projectNameInputRef`. Only rendered for the
+`isNewProject` header state, the one place this field is ever a real
+input rather than read-only text or absent.
+
+**4. A real Todoist Text Scan visual pass: darker cards, bigger
+remove/done icons, a taller modal and footer, and a confirm gate on
+Discard.** Reported directly against real Todoist Text Scan screenshots
+(a collapsed list and an expanded card). Four independent pieces:
+- `.modal.modal-super-ramble` grew from 640px/`calc(88vh - 16px)` to
+  720px/`calc(94vh - 16px)` (`.sr-preview-body`'s own scroll area from
+  60vh to 70vh to use the extra room): 720px matches `TaskDetail.jsx`'s
+  own two-column width, an existing precedent for "this app's one wider
+  modal," not an arbitrary new figure. `.modal-super-ramble .modal-footer`
+  carries more padding (`18px 20px`, up from the generic `10px 16px`).
+- Every preview row, collapsed (`.sr-tree .task-row`) and expanded
+  (`.task-edit-card`), moved from flush-against-`--ds-canvas` (the modal's
+  own background, no visual distinction of its own) to `--ds-sidebar-bg`
+  (the same "a shade darker than canvas" token the sidebar itself already
+  uses in both themes, not a new color), with padding bumped from
+  `9px 4px`/`8px 10px` to `14px 14px`/`12px 14px` so each row reads as its
+  own centered, framed card with room to breathe, matching the reference
+  screenshots' own look. Scoped to `.sr-tree` (`.task-edit-card` is
+  exclusive to this modal by construction, `editable` mode has no other
+  caller): every other `.task-row` context in the app (Inbox, Today,
+  Upcoming, Project, Board, `TaskDetail.jsx`'s sub-tasks) is unaffected,
+  verified unchanged. The `.sub`/`.sub2` depth-indent steps were re-derived
+  against the new 14px base (40px/66px, preserving the same 26px/52px
+  extra-indent-beyond-base the rest of the app already uses) so nested
+  sub-tasks still read at the correct depth inside the preview.
+- The remove/done icon pair grew from 14-15px to 17-18px, both collapsed
+  (`.task-row-actions`, the `editable`-only branch) and expanded
+  (`.task-edit-footer-actions`): scoped to the two call sites an editable
+  row alone ever reaches, not a change to `.icon-btn`'s own default sizing,
+  which every other caller in the app (Add-sub-task, "...", thumbs
+  feedback, and more) still relies on unchanged.
+- Discard now opens the same `ConfirmDialog` pattern every other
+  destructive action in this app already uses (`TaskRow`'s own task
+  delete, for one) instead of discarding on a single click: a new
+  `confirmDiscard` state, reset on a fresh proposal and on `backToEdit()`
+  for hygiene; Escape closes that dialog first, before ever considering
+  the expanded row or the whole modal, the same closest-thing-first
+  convention this modal's own `onKey` handler already follows for the
+  expanded-row case.
+
+**5. Board's own "insert before" drag indicator no longer renders inside
+the card below it.** Reported live: dragging a card in Board (Kanban)
+layout, in Inbox or any other project, showed the red `.drop-before`
+indicator line sitting inside the top of the card below the drop point,
+not in the visible gap between the two cards. Root cause: `.task-row.card`
+has an 8px `margin-bottom` gap to its next sibling, but the shared
+`.task-row.drop-before` rule (`box-shadow: inset 0 2px 0 0 var(--ds-red)`)
+draws its line 2px inside the row's own top edge, which sits well past the
+gap, inside the card below. Fixed with a card-variant-specific override:
+`.task-row.card.drop-before` cancels the inherited inset shadow and adds a
+`::before` line instead, absolutely positioned against the card's own box
+(`.task-row.card` gained `position: relative` for this) at `top: -5px,
+height: 2px`, centered in the 8px gap (math: the gap runs from -8px, the
+previous card's bottom edge, to 0, this card's own top edge; midpoint -4px;
+a 2px line centered on that midpoint spans -5px to -3px). The flat,
+flush-against-each-other list rows elsewhere (no gap to center within,
+ProjectView's List layout, Sidebar's project tree) keep the original inset
+treatment unchanged; this is a card-variant-only fix. Board.jsx itself
+needed no changes, only its own two CSS rules; verified the fix
+mathematically (`getComputedStyle`/`getBoundingClientRect` against a
+JS-toggled `.drop-before` class, since native HTML5 drag-and-drop does not
+simulate reliably through synthetic mouse events in this environment): the
+line spans 265.6-267.6px against a real 262.6-270.6px gap, centered on the
+gap's own 266.6px midpoint.
+
+**Verified live**, `VITE_ENABLE_LOCAL_PREVIEW=true` locally (a temporary
+debug-mock branch in `submit()`, removed before committing, never
+shipped): the reasoning line read longer and explicitly mentioned the
+milk-and-eggs errand going to Inbox, with no separate note line below it;
+the edit-pencil icon appeared beside "Apartment Move" and focused the
+input on click; every row (collapsed and the expanded card) showed the
+darker background with visibly more padding; the remove/done icons
+measured 18x18 via `getComputedStyle`; Discard opened the confirm dialog,
+Cancel returned to an intact preview, a second Discard-then-confirm closed
+cleanly with nothing written. Build clean, full `npm run eval` (23 write
+cases, 21 offline cases, prompt-sync) green, `node scripts/check-secrets.mjs`
+and `npm run verify:prod-env` both clean.
+
+### Decisions not to relitigate
+
+- The reasoning sentence's length cap is 40 words / one-or-two sentences
+  now, not 20 words / one sentence. Do not tighten it back citing the
+  second-round entry's own reasoning; this pass explicitly asked for more
+  explanation, within a still-tight bound.
+- `.sr-standalone-note` is gone. The model's own reasoning sentence is now
+  the single place that states a standalone routing in prose; the per-row
+  "Loose, going to Inbox" group is the deterministic backstop. Do not
+  re-add a separate summary line for this without a new, equally explicit
+  decision.
+- The darker-card/bigger-icon/taller-modal treatment is scoped to the
+  Super Ramble preview specifically (`.sr-tree`, `.task-edit-card`, the two
+  named icon call sites). Do not extend `--ds-sidebar-bg` row backgrounds,
+  17-18px icons, or a 720px modal width to any other view without a new,
+  equally explicit decision; every other `.task-row`/`.modal` caller in the
+  app is unchanged on purpose.
+- Discard requires confirmation now, matching every other destructive
+  action in this app. Do not revert to a single-click Discard.
+- `.task-row.card.drop-before`'s `::before`-line treatment is specific to
+  the card variant (Board/Kanban); the flat-list `.drop-before` rows
+  elsewhere keep the original inset-shadow treatment. Do not unify the two
+  without checking both contexts' own spacing first.
+
 ## 2026-07-17 (fifth round): Every Super Ramble preview row shows its destination with the "#" hash, Inbox shows as Inbox, closing a Text-Scan-parity gap
 
 Read `docs/orchestration.md`, the full `docs/` set, and the prior same-day

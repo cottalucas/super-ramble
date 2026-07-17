@@ -10,7 +10,8 @@ import { createTodoistClient } from '../todoist/index.js';
 import { COLOR_NAMES } from '../lib/colors.js';
 import TaskRow, { buildChildrenMap, ProjectLabel } from './TaskRow.jsx';
 import VoiceRecorder from './VoiceRecorder.jsx';
-import { IconThumbsUp, IconThumbsDown } from './Icons.jsx';
+import ConfirmDialog from './ConfirmDialog.jsx';
+import { IconThumbsUp, IconThumbsDown, IconEdit } from './Icons.jsx';
 
 // A few minutes, comfortably above processStructureTrace's own 180s
 // timeoutSeconds ceiling (functions/index.js, reasoned from real Cloud
@@ -318,6 +319,11 @@ export default function SuperRambleModal({ onClose }) {
   });
   const [errorMsg, setErrorMsg] = useState('');
   const [confirming, setConfirming] = useState(false);
+  // Gates the Discard button behind the same ConfirmDialog pattern every
+  // other destructive action in this app already uses (TaskRow's own task
+  // delete, for one): a reviewed, unconfirmed proposal is real, easy-to-lose
+  // work, so a single misclick should not throw it away with no recovery.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   // Always defaults off, on every fresh proposal: this is a second real
   // external write, and confirm-before-write is the app's whole premise, so
   // there is no "leave it on" persisted preference. See docs/brief.md.
@@ -328,6 +334,12 @@ export default function SuperRambleModal({ onClose }) {
   // that actually produced the proposal being shown, not a stale closure.
   const traceIdRef = useRef(null);
   const [traceId, setTraceId] = useState(null);
+  // Focuses the project-name input when the small edit-pencil affordance
+  // beside it is clicked: the field is already directly editable by
+  // clicking into it, this just gives that a visible, discoverable trigger
+  // too (reported directly against real Todoist's own Text Scan reference,
+  // which marks its editable title with the same kind of affordance).
+  const projectNameInputRef = useRef(null);
 
   // A traceId means there is now something real to mark cancelled, so
   // closing mid-wait is allowed from that point on (recordOutcome below);
@@ -339,6 +351,13 @@ export default function SuperRambleModal({ onClose }) {
   useEffect(() => {
     function onKey(e) {
       if (e.key === 'Escape' && !confirming) {
+        // Closest-thing-first, same convention throughout this handler: the
+        // Discard confirmation dialog closes before ever considering the
+        // expanded row or the whole modal.
+        if (confirmDiscard) {
+          setConfirmDiscard(false);
+          return;
+        }
         // A row expanded into its own edit card collapses first: the same
         // "Escape closes the nearest thing, not everything" convention this
         // app already uses elsewhere, and without this check Escape while
@@ -354,7 +373,7 @@ export default function SuperRambleModal({ onClose }) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose, state, confirming, canCloseWhileWaiting, expandedTaskId]);
+  }, [onClose, state, confirming, canCloseWhileWaiting, expandedTaskId, confirmDiscard]);
 
   // Ticks once a second while a callModel attempt is in flight, purely for
   // display (docs/roadmap.md's real-percentile copy below): the actual
@@ -551,6 +570,7 @@ export default function SuperRambleModal({ onClose }) {
       setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [], descriptionEdits: [] });
       setFeedback(null);
       setExpandedTaskId(null);
+      setConfirmDiscard(false);
       setTraceId(traceIdRef.current);
       setState('preview');
     } catch (err) {
@@ -570,6 +590,7 @@ export default function SuperRambleModal({ onClose }) {
     setEditLog({ removedTasks: [], contentEdits: [], priorityEdits: [], dueEdits: [], sectionEdits: [], descriptionEdits: [] });
     setFeedback(null);
     setExpandedTaskId(null);
+    setConfirmDiscard(false);
     setErrorMsg('');
   }
 
@@ -875,7 +896,7 @@ export default function SuperRambleModal({ onClose }) {
                     />
                   </div>
                   <p className="sr-loading-elapsed">
-                    {waitingElapsedSec}s elapsed, complex or tangled dumps can take a minute or more.
+                    {waitingElapsedSec}s elapsed, complex or tangled inputs can take a minute or more.
                   </p>
                 </>
               ) : null}
@@ -994,13 +1015,6 @@ export default function SuperRambleModal({ onClose }) {
               // when previewProject above is a different existing project,
               // null (the new-project case), or already the Inbox itself.
               const inboxProject = projects.find((p) => p.id === inboxId);
-              // Counted from `edited`, not `structured`: this always states
-              // what Confirm would actually write, the same "never a
-              // separate guess" discipline the three-way header above
-              // already follows, so removing a standalone task in the
-              // preview updates this count too.
-              const standaloneCount =
-                structured.decision === 'project' ? (edited.tasks || []).filter((t) => t.standalone === true).length : 0;
               // Hidden entirely outside this one case: routing into an
               // existing project, loose tasks, and "not connected" all skip
               // a second real external write nobody asked for here. See
@@ -1045,13 +1059,24 @@ export default function SuperRambleModal({ onClose }) {
                     {isNewProject ? (
                       <>
                         <span className="sr-project-name-label">Suggested project name</span>
-                        <input
-                          type="text"
-                          className="sr-project-name-input"
-                          aria-label="Project name"
-                          value={edited.project.name}
-                          onChange={(e) => editProjectName(e.target.value)}
-                        />
+                        <div className="sr-project-name-edit">
+                          <input
+                            ref={projectNameInputRef}
+                            type="text"
+                            className="sr-project-name-input"
+                            aria-label="Project name"
+                            value={edited.project.name}
+                            onChange={(e) => editProjectName(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className="sr-project-name-edit-icon"
+                            title="Edit project name"
+                            onClick={() => projectNameInputRef.current?.focus()}
+                          >
+                            <IconEdit width={14} height={14} />
+                          </button>
+                        </div>
                       </>
                     ) : targetProject ? (
                       <>
@@ -1062,11 +1087,6 @@ export default function SuperRambleModal({ onClose }) {
                       </>
                     ) : isLooseTasks ? (
                       <span className="sr-project-name-label">Loose tasks, added to Inbox</span>
-                    ) : null}
-                    {standaloneCount > 0 ? (
-                      <span className="sr-standalone-note">
-                        {standaloneCount} task{standaloneCount === 1 ? '' : 's'} stays loose, added to Inbox
-                      </span>
                     ) : null}
                     <TreePreview
                       editedStructured={edited}
@@ -1094,14 +1114,7 @@ export default function SuperRambleModal({ onClose }) {
                       </label>
                     ) : null}
                     <div className="right">
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => {
-                          recordOutcome(traceId, 'cancelled');
-                          onClose();
-                        }}
-                      >
+                      <button type="button" className="btn btn-ghost" onClick={() => setConfirmDiscard(true)}>
                         Discard
                       </button>
                       <button type="button" className="btn btn-primary" disabled={confirming} onClick={confirm}>
@@ -1109,6 +1122,19 @@ export default function SuperRambleModal({ onClose }) {
                       </button>
                     </div>
                   </div>
+                  {confirmDiscard ? (
+                    <ConfirmDialog
+                      title="Discard this proposal?"
+                      message="Nothing has been written yet. This throws away the whole reviewed proposal."
+                      confirmLabel="Discard"
+                      onConfirm={() => {
+                        setConfirmDiscard(false);
+                        recordOutcome(traceId, 'cancelled');
+                        onClose();
+                      }}
+                      onCancel={() => setConfirmDiscard(false)}
+                    />
+                  ) : null}
                 </>
               );
             })()

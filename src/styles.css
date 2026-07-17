@@ -756,6 +756,10 @@ textarea {
   padding: 10px 12px;
   margin-bottom: 8px;
   background: var(--ds-canvas);
+  /* Anchors the card variant's own .drop-before::before line below, so it
+     positions against this card's own box, not the nearest ancestor that
+     happens to be positioned. */
+  position: relative;
 }
 
 .task-row[draggable='true'] {
@@ -799,6 +803,34 @@ textarea {
 .task-row.drop-before,
 .nav-item.drop-before {
   box-shadow: inset 0 2px 0 0 var(--ds-red);
+}
+
+/* Board's own card variant needs a different treatment than the flat-list
+   rule above: a card has a real 8px gap to its next sibling (.task-row.card's
+   own margin-bottom), so the shared inset-top-edge shadow rendered the red
+   line inside the card below it instead of in that gap, reported directly:
+   "the line is on top of the card below, it should be in the middle of the
+   cards." A `::before` line, positioned against the card's own box (the
+   `position: relative` above) and centered in that 8px gap, replaces the
+   inset shadow for this variant only; the flat, flush-against-each-other
+   rows above (no gap to center within) keep the original treatment
+   unchanged. `top: -5px` with a 2px line centers it inside the 8px band
+   directly above this card's own top edge, math: the gap runs from -8px
+   (the previous card's bottom edge) to 0 (this card's top edge), so its
+   midpoint is -4px; a 2px line centered on that midpoint spans -5px to -3px. */
+.task-row.card.drop-before {
+  box-shadow: none;
+}
+
+.task-row.card.drop-before::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -5px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ds-red);
 }
 
 .task-row.drop-nest,
@@ -1496,8 +1528,25 @@ textarea:focus {
 }
 
 /* ---------- Super Ramble ---------- */
+/* Wider and taller than the generic .modal default, reported directly
+   against a real Todoist Text Scan screenshot: a reviewable proposal is a
+   real, information-dense surface, not a quick one-field dialog, and the
+   prior 640px/88vh sizing read as a small square on a much bigger screen.
+   720px matches TaskDetail's own two-column width (docs/design-system.md's
+   "Responsive" section), an existing precedent for "this app's one wider
+   modal," not an arbitrary new number. */
 .modal.modal-super-ramble {
-  width: 640px;
+  width: 720px;
+  max-height: calc(94vh - 16px);
+}
+
+/* Taller than the generic .modal-footer default, reported alongside the
+   modal's own size bump above: this bar carries the app's one heaviest
+   Confirm action on this surface (a real write, possibly a second Todoist
+   write too), so it reads as a deliberate, substantial footer, not a
+   cramped afterthought. */
+.modal-super-ramble .modal-footer {
+  padding: 18px 20px;
 }
 
 .sr-body {
@@ -1505,8 +1554,37 @@ textarea:focus {
 }
 
 .sr-preview-body {
-  max-height: 60vh;
+  max-height: 70vh;
   overflow-y: auto;
+}
+
+/* Every preview row reads as its own card against the modal's plain
+   canvas background, reported directly against real Todoist's Text Scan
+   reference: a filled, slightly darker background (`--ds-sidebar-bg`, the
+   same "a shade darker than canvas" token the sidebar itself already uses
+   in both themes, docs/design-system.md's token table, not a new color)
+   in place of a flush hairline-divider row, with enough padding on every
+   side to read as centered and framed rather than edge-to-edge, and more
+   vertical room so the row breathes. Scoped to `.sr-tree` specifically:
+   every other `.task-row` caller in the app (Inbox, Today, Upcoming,
+   Project, Board, TaskDetail's sub-tasks) is unaffected, unchanged. The
+   `.sub`/`.sub2` depth-indent steps are preserved via a `padding-left`
+   override alone, so indentation still reads correctly at every depth
+   inside the preview. */
+.sr-tree .task-row {
+  background: var(--ds-sidebar-bg);
+  border-radius: 8px;
+  padding: 14px 14px;
+  margin: 0 0 8px;
+  border-bottom: none;
+}
+
+.sr-tree .task-row.sub {
+  padding-left: 40px;
+}
+
+.sr-tree .task-row.sub2 {
+  padding-left: 66px;
 }
 
 .sr-textarea {
@@ -1797,8 +1875,8 @@ textarea:focus {
 .sr-project-name-input {
   display: block;
   width: 100%;
-  margin: 0 0 10px;
-  padding: 2px 0;
+  margin: 0;
+  padding: 2px 22px 2px 0;
   border: 0;
   outline: none;
   background: transparent;
@@ -1806,6 +1884,32 @@ textarea:focus {
   font-size: 16px;
   font-weight: 600;
   font-family: inherit;
+}
+
+/* Wraps the input so the edit-pencil affordance can position against its
+   own box (margin moved here from .sr-project-name-input itself, which
+   only ever renders inside this wrapper now). */
+.sr-project-name-edit {
+  position: relative;
+  margin: 0 0 10px;
+}
+
+.sr-project-name-edit-icon {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-soft);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.sr-project-name-edit-icon:hover {
+  color: var(--ds-ink);
 }
 
 /* Read-only sibling of .sr-project-name-input: routing into an existing
@@ -1825,17 +1929,6 @@ textarea:focus {
   font-weight: 600;
 }
 
-/* Same look as .sr-project-name-label, a small margin of its own since it
-   follows a project name input/value that already carries its own bottom
-   margin: states the standalone-task split before Confirm, so it is never a
-   surprise once the tree is actually written (docs/llm-pipeline.md, Stage 2,
-   src/pipeline/write.js's toProjectTree). */
-.sr-standalone-note {
-  display: block;
-  margin: 0 0 10px;
-  color: var(--ds-ink-soft);
-  font-size: 12px;
-}
 
 /* Editable preview (SuperRambleModal): a task's content becomes an inline
    text input in place of the plain .task-content div, borderless like
@@ -1877,8 +1970,12 @@ textarea:focus {
 .task-edit-card {
   border: 1px solid var(--ds-line);
   border-radius: 8px;
-  background: var(--ds-canvas);
-  padding: 8px 10px;
+  /* Matches the collapsed row's own darker `.sr-tree .task-row` background
+     above, for consistency between the two states, rather than the plain
+     `--ds-canvas` this used before (flush with the modal itself, no
+     distinct "card" read of its own). */
+  background: var(--ds-sidebar-bg);
+  padding: 12px 14px;
   margin: 2px 0;
 }
 
