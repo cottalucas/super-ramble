@@ -20,7 +20,7 @@ const TOP_KEYS = [
 ];
 const PROJECT_KEYS = ['name'];
 const SECTION_KEYS = ['ref', 'name'];
-const TASK_KEYS = ['content', 'priority', 'due', 'subtasks', 'sectionRef'];
+const TASK_KEYS = ['content', 'priority', 'due', 'subtasks', 'sectionRef', 'standalone'];
 const SUBTASK_KEYS = ['content', 'priority', 'due'];
 
 function unknownKeys(obj, allowed) {
@@ -137,6 +137,12 @@ export function validateStructure(obj, opts = {}) {
     errors.push('tasks must be an array');
   } else {
     obj.tasks.forEach((t, i) => validateTask(t, `tasks[${i}]`, errors, sectionRefs));
+    // decision "tasks" is already the loose-tasks shape: everything in it is
+    // already outside any project, so there is nothing for standalone to
+    // mark this task apart from.
+    if (obj.decision === 'tasks' && obj.tasks.some((t) => t && t.standalone === true)) {
+      errors.push('decision "tasks" must not carry a standalone task; everything is already loose');
+    }
   }
 
   if (typeof obj.needsClarification !== 'boolean') {
@@ -175,6 +181,12 @@ function validateTask(t, path, errors, sectionRefs) {
     } else if (!sectionRefs || !sectionRefs.has(t.sectionRef)) {
       errors.push(`${path}.sectionRef "${t.sectionRef}" does not match any declared section`);
     }
+  }
+  if (t.standalone !== undefined && typeof t.standalone !== 'boolean') {
+    errors.push(`${path}.standalone must be a boolean`);
+  }
+  if (t.standalone === true && t.sectionRef !== undefined && t.sectionRef !== null) {
+    errors.push(`${path}.standalone task must not also carry a sectionRef, it is leaving the project's own sections entirely`);
   }
   if (t.subtasks !== undefined) {
     if (!Array.isArray(t.subtasks)) {

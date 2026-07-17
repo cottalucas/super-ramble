@@ -74,7 +74,7 @@ const inboxId = 'inbox-1';
 // --- Baseline: unedited structured object produces every task, unchanged ---
 {
   const s = baseStructured();
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check('baseline-all-content-present', 'an unedited response produces every task and sub-task', contents(tree), [
     'Task A',
     'Sub A1',
@@ -88,7 +88,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't0', () => null); // Task A, and Sub A1/A2 nested inside it
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check(
     'remove-root-task-cascades',
     'removing a root task removes its own sub-tasks too, the same cascade store.deleteTask uses',
@@ -101,7 +101,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't0s1', () => null); // Sub A2 only
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check(
     'remove-one-subtask',
     'removing a sub-task removes only that sub-task, its parent and sibling stay',
@@ -122,7 +122,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't0', (t) => ({ ...t, content: 'Task A, edited' }));
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check(
     'edit-root-content',
     'editing a root task\'s content replaces it, sub-tasks are untouched',
@@ -135,7 +135,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't0s0', (t) => ({ ...t, content: 'Sub A1, edited' }));
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check('edit-subtask-content', 'editing a sub-task\'s content replaces it', contents(tree), [
     'Task A',
     'Sub A1, edited',
@@ -148,7 +148,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.project = { ...s.project, name: 'Renamed Project' };
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check('rename-project', 'an edited project name reaches the produced tree, not the model\'s original name', tree.project.name, 'Renamed Project');
 }
 
@@ -158,7 +158,7 @@ const inboxId = 'inbox-1';
   s.decision = 'tasks';
   s.targetProjectId = 'proj-existing';
   s.project = null;
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check('routed-project-uses-id-not-name', 'routing into an existing project writes by id, never a name', tree.project, {
     id: 'proj-existing'
   });
@@ -168,7 +168,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't0', (t) => ({ ...t, priority: 1 }));
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check('edit-priority', "editing a task's priority replaces it, other fields untouched", taskByContent(tree, 'Task A').priority, 1);
 }
 
@@ -176,7 +176,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't0', (t) => ({ ...t, due: '2026-07-20' }));
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   const due = taskByContent(tree, 'Task A').due;
   check('edit-due-date', 'an edited raw due string flows straight through toDue() at Confirm-time', due.date, '2026-07-20');
   check('edit-due-string-verbatim', "toDue()'s own string field carries the edited raw value verbatim", due.string, '2026-07-20');
@@ -186,7 +186,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't1', (t) => ({ ...t, due: null })); // Task B started with due: 'today'
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check('clear-due', "clearing a task's due writes a null due through, same as no due at all", taskByContent(tree, 'Task B').due, null);
 }
 
@@ -194,7 +194,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't1', (t) => ({ ...t, sectionRef: 'sec1' })); // Task B started with no section
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check('edit-section', "editing a task's sectionRef moves it into that section", taskByContent(tree, 'Task B').sectionRef, 'sec1');
 }
 
@@ -202,7 +202,7 @@ const inboxId = 'inbox-1';
 {
   const s = baseStructured();
   s.tasks = updateTaskAtRef(s.tasks, 't0', (t) => ({ ...t, description: 'Bring extra socks' }));
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check(
     'edit-description',
     "editing a task's description replaces it, a real already-existing task field Structure's own contract never populates",
@@ -223,7 +223,7 @@ const inboxId = 'inbox-1';
   s.tasks = updateTaskAtRef(s.tasks, 't1', () => null); // remove Task B entirely
   s.tasks = updateTaskAtRef(s.tasks, 't0s0', (t) => ({ ...t, content: 'Sub A1, edited' }));
   s.project = { ...s.project, name: 'Renamed Project' };
-  const tree = toProjectTree(s, { inboxId });
+  const tree = toProjectTree(s, { inboxId }).trees[0];
   check(
     'full-edit-path-contents',
     'a removed task is absent, an edited task\'s new content is present, both survive alongside an untouched sibling',
@@ -231,6 +231,42 @@ const inboxId = 'inbox-1';
     ['Task A', 'Sub A1, edited', 'Sub A2']
   );
   check('full-edit-path-project-name', 'the same edited tree also carries the renamed project through', tree.project.name, 'Renamed Project');
+}
+
+// --- A standalone root task (with its own subtask), alongside normal project
+// tasks, produces a second tree routed to the real Inbox, docs/llm-pipeline.md
+// Stage 2 ---
+{
+  const s = baseStructured();
+  s.tasks.push({
+    content: 'Pick up milk and eggs',
+    priority: 3,
+    due: null,
+    sectionRef: null,
+    standalone: true,
+    subtasks: [{ content: 'Grab a gallon of oat milk too', priority: 4, due: null }]
+  });
+  const { trees } = toProjectTree(s, { inboxId });
+  check('standalone-produces-two-trees', 'a response with one standalone root task produces exactly two trees', trees.length, 2);
+  check(
+    'standalone-excluded-from-main-tree',
+    'the main tree excludes the standalone task and its subtask entirely',
+    contents(trees[0]),
+    ['Task A', 'Sub A1', 'Sub A2', 'Task B']
+  );
+  check("standalone-tree-routes-to-inbox", "the second tree's project is the real Inbox, by id", trees[1].project, { id: inboxId });
+  check(
+    'standalone-tree-contents',
+    'the second tree carries the standalone task and its own subtask',
+    contents(trees[1]),
+    ['Pick up milk and eggs', 'Grab a gallon of oat milk too']
+  );
+  check(
+    'standalone-tree-section-null',
+    "the standalone task's sectionRef is forced null, it left the project's own sections",
+    trees[1].tasks[0].sectionRef,
+    null
+  );
 }
 
 console.log(`\n${passed}/${passed + failed} passed.`);

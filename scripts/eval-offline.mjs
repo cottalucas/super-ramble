@@ -44,9 +44,17 @@ function check(label, ok, detail) {
 function fieldsByContent(obj) {
   const map = new Map();
   for (const t of obj.tasks || []) {
-    if (t && typeof t.content === 'string') map.set(t.content, { priority: t.priority, due: t.due ?? null });
+    // A subtask never carries its own standalone field in the contract
+    // (docs/llm-pipeline.md, Stage 2); it inherits its parent root task's
+    // value, the same way src/pipeline/write.js's flattenTasks carries it
+    // onto a standalone task's own subtasks.
+    if (t && typeof t.content === 'string') {
+      map.set(t.content, { priority: t.priority, due: t.due ?? null, standalone: Boolean(t.standalone) });
+    }
     for (const s of t?.subtasks || []) {
-      if (s && typeof s.content === 'string') map.set(s.content, { priority: s.priority, due: s.due ?? null });
+      if (s && typeof s.content === 'string') {
+        map.set(s.content, { priority: s.priority, due: s.due ?? null, standalone: Boolean(t?.standalone) });
+      }
     }
   }
   return map;
@@ -111,6 +119,30 @@ async function runFixtures() {
         .filter(([content, d]) => (fields.get(content)?.due ?? null) !== (d ?? null))
         .map(([content, d]) => `${content}: expected ${JSON.stringify(d)}, got ${JSON.stringify(fields.get(content)?.due)}`);
       checks.push(check('due matches', mismatches.length === 0, mismatches.join('; ')));
+    }
+
+    // Every content string a fixture lists as standalone must actually carry
+    // standalone: true in the real output, and nothing outside that list
+    // should, the same symmetric extra/missing style the "contents" check
+    // below already uses. See docs/llm-pipeline.md, Stage 2, and
+    // src/pipeline/write.js's toProjectTree, which routes anything this
+    // marks true into a second Inbox tree.
+    if ('standaloneContents' in exp) {
+      const fields = fieldsByContent(out);
+      const expectedStandalone = new Set(exp.standaloneContents);
+      const wronglyStandalone = Array.from(fields.entries())
+        .filter(([content, f]) => f.standalone && !expectedStandalone.has(content))
+        .map(([content]) => `extra: ${content}`);
+      const missingStandalone = exp.standaloneContents
+        .filter((c) => !fields.get(c)?.standalone)
+        .map((c) => `missing: ${c}`);
+      checks.push(
+        check(
+          'standalone routing matches',
+          wronglyStandalone.length === 0 && missingStandalone.length === 0,
+          [...wronglyStandalone, ...missingStandalone].join('; ')
+        )
+      );
     }
 
     // Calibrated confidence: docs/llm-pipeline.md's own eval assertions list

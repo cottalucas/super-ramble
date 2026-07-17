@@ -71,7 +71,8 @@ function TreePreview({
   onSectionChange,
   expandedTaskId,
   onToggleExpand,
-  previewProject
+  previewProject,
+  inboxProject
 }) {
   const flat = flattenTasks(editedStructured);
   const rows = flat.map((t, i) => ({
@@ -96,12 +97,23 @@ function TreePreview({
     dueRaw: t.due,
     completed: false,
     labels: [],
-    order: i
+    order: i,
+    // Root tasks only in the contract (docs/llm-pipeline.md, Stage 2), but
+    // flattenTasks already carries the same value onto a standalone task's
+    // own subtasks, so a sub-task row here inherits it too, matching how it
+    // travels with its parent into the second toProjectTree tree.
+    standalone: t.standalone === true
   }));
   const childrenOf = buildChildrenMap(rows);
   const roots = rows.filter((t) => !t.parentId);
+  // A standalone root task is leaving this project for Inbox entirely
+  // (src/pipeline/write.js's toProjectTree), so it renders in its own group
+  // below, never inside a section or "No section", where it would be
+  // indistinguishable from a real project task that simply has none.
+  const projectRoots = roots.filter((t) => !t.standalone);
+  const standaloneRoots = roots.filter((t) => t.standalone);
   const sections = editedStructured.sections || [];
-  const noSectionRoots = roots.filter((t) => !t.sectionId);
+  const noSectionRoots = projectRoots.filter((t) => !t.sectionId);
 
   if (!roots.length) {
     return <p className="sr-empty">No tasks in this one.</p>;
@@ -110,7 +122,7 @@ function TreePreview({
   return (
     <div className="sr-tree">
       {sections.map((s) => {
-        const secRoots = roots.filter((t) => t.sectionId === s.ref);
+        const secRoots = projectRoots.filter((t) => t.sectionId === s.ref);
         if (!secRoots.length) return null;
         return (
           <div key={s.ref} className="section">
@@ -163,6 +175,43 @@ function TreePreview({
           onToggleExpand={onToggleExpand}
         />
       ))}
+      {standaloneRoots.length ? (
+        <div className="section">
+          <div className="section-head-row">
+            <div className="section-head">
+              Loose, going to Inbox
+              <span className="count">{standaloneRoots.length}</span>
+            </div>
+          </div>
+          {standaloneRoots.map((t) => (
+            <TaskRow
+              key={t.id}
+              task={t}
+              depth={0}
+              childrenOf={childrenOf}
+              editable
+              onRemove={onRemove}
+              onContentChange={onContentChange}
+              onDescriptionChange={onDescriptionChange}
+              // No SectionRefPicker for a standalone row: it has already left
+              // this project's own sections (src/pipeline/write.js forces its
+              // sectionRef to null regardless), so an empty sections list here
+              // makes TaskRow's footer fall back to the plain project label
+              // (Inbox) instead of offering a picker whose choice would never
+              // actually land at Confirm-time, docs/design-system.md's "no
+              // dead controls" rule.
+              sections={[]}
+              onPriorityChange={onPriorityChange}
+              onDueChange={onDueChange}
+              onSectionChange={onSectionChange}
+              expandedTaskId={expandedTaskId}
+              onToggleExpand={onToggleExpand}
+              showProject={Boolean(inboxProject)}
+              project={inboxProject}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -661,19 +710,37 @@ export default function SuperRambleModal({ onClose }) {
   async function confirm() {
     if (!edited || confirming) return;
     setConfirming(true);
-    const tree = toProjectTree(edited, { inboxId });
+    // toProjectTree returns { trees }: one entry when every task belongs to
+    // the same project, two when a standalone task is leaving it for Inbox
+    // (docs/llm-pipeline.md, Stage 2). No longer one atomic batch across
+    // both when a second entry exists: the main tree is the one the user
+    // actually came here for, so its own failure still aborts outright, but
+    // the loose-tasks tree's own failure is reported plainly alongside a
+    // real, already-landed success rather than hidden behind a generic
+    // failure message.
+    const { trees } = toProjectTree(edited, { inboxId });
+    const [mainTree, looseTree] = trees;
     try {
-      await store.createProjectTree(tree);
+      await store.createProjectTree(mainTree);
     } catch {
       setConfirming(false);
       flash('Could not save. Try Confirm again.');
       return;
     }
 
+    let looseTasksError = null;
+    if (looseTree) {
+      try {
+        await store.createProjectTree(looseTree);
+      } catch (err) {
+        looseTasksError = err.message || 'Could not save.';
+      }
+    }
+
     let todoistError = null;
     if (pushToTodoist) {
       try {
-        await createTodoistClient({ getAuthToken: () => getAuthToken(isLocal) }).createTree(tree);
+        await createTodoistClient({ getAuthToken: () => getAuthToken(isLocal) }).createTree(mainTree);
       } catch (err) {
         todoistError = err.message || 'Could not push to Todoist.';
       }
@@ -722,11 +789,21 @@ export default function SuperRambleModal({ onClose }) {
     } else {
       recordOutcome(traceId, 'confirmed');
     }
-    if (todoistError) {
-      flash(`Saved. Todoist push failed: ${todoistError}`);
-    } else {
-      flash(isNewProject ? (pushToTodoist ? 'Project created, and pushed to Todoist' : 'Project created') : 'Tasks added');
+    // Stated in order, never silently dropping one failure for the other:
+    // either, both, or neither can be true, alongside the main tree's own
+    // real, already-landed success.
+    const failureParts = [];
+    if (todoistError) failureParts.push(`Todoist push failed: ${todoistError}`);
+    if (looseTasksError) {
+      const looseCount = looseTree.tasks.filter((t) => !t.parentRef).length;
+      failureParts.push(`Couldn't add ${looseCount} loose task${looseCount === 1 ? '' : 's'} to Inbox: ${looseTasksError}`);
     }
+    const successLabel = isNewProject
+      ? pushToTodoist && !todoistError
+        ? 'Project created, and pushed to Todoist'
+        : 'Project created'
+      : 'Tasks added';
+    flash(failureParts.length ? `${successLabel}. ${failureParts.join(' ')}` : successLabel);
     onClose();
   }
 
@@ -886,6 +963,19 @@ export default function SuperRambleModal({ onClose }) {
               // case unambiguously, so a per-row chip there would have
               // nothing real to show.
               const previewProject = targetProject || (isLooseTasks ? projects.find((p) => p.id === inboxId) : null);
+              // The real Inbox project, resolved once regardless of where
+              // the rest of this response routes: a standalone task always
+              // lands there (src/pipeline/write.js's toProjectTree), even
+              // when previewProject above is a different existing project,
+              // null (the new-project case), or already the Inbox itself.
+              const inboxProject = projects.find((p) => p.id === inboxId);
+              // Counted from `edited`, not `structured`: this always states
+              // what Confirm would actually write, the same "never a
+              // separate guess" discipline the three-way header above
+              // already follows, so removing a standalone task in the
+              // preview updates this count too.
+              const standaloneCount =
+                structured.decision === 'project' ? (edited.tasks || []).filter((t) => t.standalone === true).length : 0;
               // Hidden entirely outside this one case: routing into an
               // existing project, loose tasks, and "not connected" all skip
               // a second real external write nobody asked for here. See
@@ -951,6 +1041,11 @@ export default function SuperRambleModal({ onClose }) {
                     ) : isLooseTasks ? (
                       <span className="sr-project-name-label">Loose tasks, added to Inbox</span>
                     ) : null}
+                    {standaloneCount > 0 ? (
+                      <span className="sr-standalone-note">
+                        {standaloneCount} task{standaloneCount === 1 ? '' : 's'} stays loose, added to Inbox
+                      </span>
+                    ) : null}
                     <TreePreview
                       editedStructured={edited}
                       onRemove={removeTask}
@@ -962,6 +1057,7 @@ export default function SuperRambleModal({ onClose }) {
                       expandedTaskId={expandedTaskId}
                       onToggleExpand={(t) => setExpandedTaskId(t ? t.id : null)}
                       previewProject={previewProject}
+                      inboxProject={inboxProject}
                     />
                   </div>
                   <div className="modal-footer">

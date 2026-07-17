@@ -1825,6 +1825,18 @@ textarea:focus {
   font-weight: 600;
 }
 
+/* Same look as .sr-project-name-label, a small margin of its own since it
+   follows a project name input/value that already carries its own bottom
+   margin: states the standalone-task split before Confirm, so it is never a
+   surprise once the tree is actually written (docs/llm-pipeline.md, Stage 2,
+   src/pipeline/write.js's toProjectTree). */
+.sr-standalone-note {
+  display: block;
+  margin: 0 0 10px;
+  color: var(--ds-ink-soft);
+  font-size: 12px;
+}
+
 /* Editable preview (SuperRambleModal): a task's content becomes an inline
    text input in place of the plain .task-content div, borderless like
    .sr-project-name-input above, same size/weight as the row's own text so

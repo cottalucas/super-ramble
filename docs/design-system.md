@@ -296,12 +296,16 @@ identical input:
   in the Structure contract at all yet (`docs/llm-pipeline.md`, Stage 2,
   its own named future item, `docs/roadmap.md`'s "Next" section); Reminders
   were removed from this app's entire data model on purpose
-  (`docs/architecture.md`); and there is no mechanism for routing one task
-  within a single Structure response into an arbitrary different project,
-  the whole response writes into one project (or Inbox) in one
-  `createProjectTree` batch (`src/pipeline/write.js`'s `toProjectTree`), so
-  real per-task cross-project reassignment would be an architecture change,
-  not a UI fix. See `docs/resolution-log.md`, 2026-07-17.
+  (`docs/architecture.md`); and there is still no mechanism for a user to
+  route one task within a single Structure response into an arbitrary
+  different project from this card. The one narrow exception, added later
+  (`standalone`, below): the model itself, not a user picker, can mark one
+  root task as leaving the project for the real Inbox, `toProjectTree`
+  writing it as a second `createProjectTree` batch rather than forcing it
+  into the same tree as everything else. Real per-task, user-driven
+  cross-project reassignment (picking any project, not just Inbox) would
+  still be an architecture change, not a UI fix. See
+  `docs/resolution-log.md`, 2026-07-17.
 - **A three-way header, same date, same reference comparison: which of new
   project, existing project, or loose tasks this response resolves to was
   only ever shown for the new-project case before this pass** (the
@@ -321,6 +325,33 @@ identical input:
   off `toProjectTree`'s own real routing
   (`{ id: structured.targetProjectId || inboxId }`, `src/pipeline/write.js`),
   not a separate guess at what Confirm will do.
+- **The standalone split is stated before Confirm, not just honored silently
+  at write time.** When `decision === 'project'` and at least one task in
+  `edited.tasks` carries `standalone: true` (docs/llm-pipeline.md, Stage 2),
+  a small `.sr-standalone-note` line ("N tasks stay loose, added to Inbox,"
+  same look as `.sr-project-name-label`, its own top/bottom margin since it
+  follows a project name input or value that already carries one) sits below
+  whichever of the three header states above is showing. Counted from
+  `edited`, not `structured`, the same "state what Confirm will actually
+  write" discipline the three-way header itself already follows: removing a
+  standalone task in the preview updates this count. `TreePreview` partitions
+  root tasks into the ones staying in the project (grouped by section or "No
+  section," as before) and the standalone ones, rendered in their own group
+  after the rest with a `.section-head` heading, "Loose, going to Inbox," so
+  a standalone task is never indistinguishable from a real project task that
+  simply has no section. That group's rows get the real Inbox project
+  resolved once (`inboxProject`, a new prop threaded alongside
+  `previewProject`) as their own `project`/`showProject`, regardless of
+  what `previewProject` resolves to elsewhere on the same response (a
+  different existing project, `null` for the new-project case, or already
+  Inbox itself for a loose-tasks response): a standalone task always lands
+  in Inbox specifically. Its edit card's own `SectionRefPicker` is
+  deliberately not shown (an empty `sections` list is passed for this group
+  only, so `TaskRow`'s footer falls back to a plain project label instead):
+  a standalone task's `sectionRef` is forced null on Write regardless of
+  anything picked here, so a working picker would be a dead control, the
+  anti-pattern checklist's own rule. See `docs/resolution-log.md` for the
+  date this landed.
 - **A pinned transcript snippet and a task-count line**, both at the top of
   the preview, above the reasoning/confidence line: `.sr-transcript-snippet`
   is a small muted box (`--ds-ink-soft`, a light background tint, not a

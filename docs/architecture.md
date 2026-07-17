@@ -390,11 +390,27 @@ to create a new one. `sections` and `tasks` carry local refs (`ref`) that
 `tasks` reference through `parentRef` and `sectionRef`. The store pre-generates
 ids, resolves every ref to an id, and commits in one batch. The pure
 ref-resolution lives in `src/store/tree.js` and is shared by both adapters.
+`createProjectTree` itself only ever sees one tree per call; it has no notion
+of `standalone` or a multi-tree response, that split happens one layer up.
 
 Both the UI and the later pipeline create through `createProjectTree`, so there
 is one write path and one set of evals. Normal Add flows route through it too:
 adding a task to an existing project calls `createProjectTree` with
 `project: { id }` and one task.
+
+`src/pipeline/write.js`'s `toProjectTree` (the pipeline's own translation
+step, not part of the store interface itself) can call `createProjectTree`
+more than once for a single confirmed response: it returns `{ trees }`, one
+entry per `createProjectTree` call, a second entry appearing only when the
+Structure response marked a root task `standalone: true` (docs/llm-pipeline.md,
+Stage 2), a genuine outlier routed to the real Inbox separately from the
+rest of the response's own project. `SuperRambleModal.jsx`'s Confirm handler
+awaits each tree in order, main project first; this is no longer one atomic
+batch across both when a second tree exists, since the two are genuinely
+independent writes into different projects, and the second's own failure
+should not undo the first's already-landed success. See
+docs/llm-pipeline.md's Stage 3 for the full contract, including how a
+partial failure is reported.
 
 ## The Todoist client (src/todoist/)
 

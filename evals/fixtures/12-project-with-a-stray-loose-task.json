@@ -1,0 +1,69 @@
+{
+  "id": "12-project-with-a-stray-loose-task",
+  "describe": "A coherent apartment-move project plus one true stray errand ('Pick up milk and eggs') that has no natural place inside it. Asserts the standalone contract field (docs/llm-pipeline.md, Stage 2): the stray task is marked standalone true, no sectionRef, so src/pipeline/write.js's toProjectTree routes it into a second Inbox tree instead of forcing it into the new project's 'No section' column alongside the real project work.",
+  "transcript": "I'm moving out of my apartment at the end of the month, so I need to get everything organized. First I need to give my landlord written notice, technically 30 days out, so I should get that in this week. For packing, I want to start with the stuff I don't use often, books and off season clothes, then work up to the kitchen last since I still need it every day. For the actual move, I need to get quotes from a couple of moving truck companies before I book one, and once I pick one I need to reserve the truck for the last Saturday of the month. I also need to cancel the internet at the old place, but not too early, I want to time it so it overlaps with the new place's install date instead of having a gap. And I need to update my address, the post office, my bank, and my license all need the new one. Oh, and the new building requires a parking permit application before I can park there, so I should get that started soon since it apparently takes a couple weeks to process. Somewhere in there I really should just also pick up milk and eggs, keep forgetting.",
+  "existingProjects": [],
+  "mockResponse": {
+    "decision": "project",
+    "reasoning": "This describes one coherent apartment move: notice, packing, moving logistics, and address updates. Picking up milk and eggs is a real but unrelated errand, so it stays out of the project.",
+    "confidence": 0.91,
+    "targetProjectId": null,
+    "project": {
+      "name": "Apartment Move"
+    },
+    "sections": [
+      { "ref": "packing", "name": "Packing" },
+      { "ref": "logistics", "name": "Moving Logistics" },
+      { "ref": "aftermove", "name": "After the Move" }
+    ],
+    "tasks": [
+      { "content": "Give landlord written notice", "priority": 1, "due": "this week", "sectionRef": "logistics", "subtasks": [] },
+      { "content": "Pack books and off season clothes first", "priority": 4, "due": null, "sectionRef": "packing", "subtasks": [] },
+      { "content": "Pack the kitchen last", "priority": 4, "due": null, "sectionRef": "packing", "subtasks": [] },
+      {
+        "content": "Get quotes from moving truck companies",
+        "priority": 3,
+        "due": null,
+        "sectionRef": "logistics",
+        "subtasks": [
+          { "content": "Reserve the moving truck for the last Saturday of the month", "priority": 1, "due": "last Saturday of the month" }
+        ]
+      },
+      {
+        "content": "Cancel internet at the old place, timed to overlap with the new place's install",
+        "priority": 2,
+        "due": null,
+        "sectionRef": "logistics",
+        "subtasks": []
+      },
+      { "content": "Update address with the post office", "priority": 4, "due": null, "sectionRef": "aftermove", "subtasks": [] },
+      { "content": "Update address with the bank", "priority": 4, "due": null, "sectionRef": "aftermove", "subtasks": [] },
+      { "content": "Update address on driver's license", "priority": 4, "due": null, "sectionRef": "aftermove", "subtasks": [] },
+      { "content": "Apply for a parking permit at the new building", "priority": 2, "due": null, "sectionRef": "logistics", "subtasks": [] },
+      { "content": "Pick up milk and eggs", "priority": 4, "due": null, "standalone": true, "subtasks": [] }
+    ],
+    "needsClarification": false,
+    "clarificationQuestion": null
+  },
+  "expected": {
+    "decision": "project",
+    "hasProject": true,
+    "targetProjectId": null,
+    "needsClarification": false,
+    "minSubtasks": 1,
+    "contents": [
+      "Give landlord written notice",
+      "Pack books and off season clothes first",
+      "Pack the kitchen last",
+      "Get quotes from moving truck companies",
+      "Reserve the moving truck for the last Saturday of the month",
+      "Cancel internet at the old place, timed to overlap with the new place's install",
+      "Update address with the post office",
+      "Update address with the bank",
+      "Update address on driver's license",
+      "Apply for a parking permit at the new building",
+      "Pick up milk and eggs"
+    ],
+    "standaloneContents": ["Pick up milk and eggs"]
+  }
+}
