@@ -3,6 +3,73 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-07-17 (fourth round): The Super Ramble overlay no longer closes on an outside click, and the loading copy states a shape, not an unproven number
+
+Two small, independent fixes, reported together this round.
+
+**The bug.** `SuperRambleModal.jsx`'s overlay used the same
+`onMouseDown={(e) => e.target === e.currentTarget && onClose()}` pattern
+every other modal in this app uses (`AddProjectModal.jsx`,
+`ConfirmDialog.jsx`, `QuickAddModal.jsx`, `SettingsModal.jsx`,
+`TaskDetail.jsx`). For this one modal specifically, that is a real data-loss
+trap: a typed ramble, a structuring wait, or an unconfirmed proposal
+(`preview` state, no `sectionRef`/edit yet saved anywhere) is real,
+easy-to-lose work, unlike a quick Add Project or Settings dialog. A single
+stray click on the dark backdrop while reviewing a proposal silently
+discarded the whole thing, no confirmation, no recorded outcome (`recordOutcome`
+was never called from that path either, so it did not even leave a
+`"cancelled"` trace, just vanished).
+
+**Fix.** Removed the overlay's `onMouseDown` handler entirely. This modal's
+only exits now are its own explicit controls: Cancel (input state), Discard
+(preview state), Confirm, and the existing Escape key handler (`onKey`,
+unchanged, still closes or cancels exactly as before, since Escape is a
+deliberate keypress, not an easy accidental miss-click). Every other modal
+in the app is unaffected; this is a named, single-modal exception, not a
+new app-wide convention. See `docs/design-system.md`'s "Super Ramble
+preview" section for the documented exception, so a future pass does not
+"fix" this back to the shared pattern without a new, equally explicit
+decision.
+
+**Also folded in, from the same-day loading-copy conversation:** the
+loading state's `{n}s elapsed, usually under {P50}s.` line is gone.
+`STRUCTURE_P50_SECONDS` (10) was only ever supported by 2 real Cloud Logging
+data points, both the identical short test transcript from the 2026-07-14
+debugging session (`docs/resolution-log.md` that date, and the third-round
+entry above); stating it as "usual" reads as visibly wrong the moment a
+real call runs past 10 seconds, which the near-max-token bucket already
+shows happens routinely for a longer or more tangled dump. Replaced with a
+sentence that states the shape of the finding instead of an unproven
+percentile: `{n}s elapsed, complex or tangled dumps can take a minute or
+more.` This degrades gracefully regardless of how long a given call
+actually takes, unlike a specific number. `STRUCTURE_P50_SECONDS` itself is
+removed (no other reader); `STRUCTURE_P90_SECONDS` (96) stays, since it is
+a real number driving the progress bar's own fill percentage, not prose
+shown to the user.
+
+**Verified live**, `VITE_ENABLE_LOCAL_PREVIEW=true` locally (reverted after):
+typed text into the ramble textarea, clicked the dark backdrop outside the
+modal card, confirmed the modal stayed open with the typed text intact;
+confirmed Cancel still closes it normally. Forced the `loading` state
+directly (temporary initial-state override, reverted before committing) to
+read the new elapsed-time line rendering correctly against the live
+progress bar. Build clean, full `npm run eval` (23 write cases, 21 offline
+cases, prompt-sync) green, `node scripts/check-secrets.mjs` clean,
+`npm run verify:prod-env` clean.
+
+### Decisions not to relitigate
+
+- Super Ramble's overlay does not close on an outside click. This is a
+  deliberate, single-modal exception to this app's shared overlay-dismissal
+  convention, not a bug to "fix" back to matching every other modal.
+- The loading state's elapsed-time copy states a shape (simple dumps are
+  fast, complex ones are slow), not a specific percentile. Do not
+  reintroduce a hardcoded "usually under Ns" claim from a sample this thin
+  (still 8 real calls total, still one repeated test transcript, as of this
+  entry); re-derive it from `npm run structure:timing-stats` once real,
+  varied usage accumulates, per the third-round entry above and
+  `docs/roadmap.md`'s "Next" section.
+
 ## 2026-07-17 (third round): A `standalone` task flag, closing the "one stray errand has nowhere to go but inside the new project" gap
 
 Read `docs/orchestration.md`, the full `docs/` set, and both same-day entries
