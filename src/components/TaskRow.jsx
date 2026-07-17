@@ -325,8 +325,15 @@ export default function TaskRow({
                   ) : null}
                 </div>
                 <div className="task-edit-footer-actions">
+                  {/* Bigger than a normal 14-15px icon-btn glyph elsewhere in
+                      this app, reported directly against real Todoist's own
+                      Text Scan reference: its remove/done controls read
+                      larger, this row's own most frequent actions. Scoped to
+                      this one pair, not a change to .icon-btn's own default
+                      sizing, which every other caller in the app still
+                      relies on unchanged. */}
                   <button type="button" className="icon-btn" title="Remove" onClick={() => onRemove(task)}>
-                    <IconX width={15} height={15} className="icon" />
+                    <IconX width={18} height={18} className="icon" />
                   </button>
                   <button
                     type="button"
@@ -334,7 +341,7 @@ export default function TaskRow({
                     title="Done"
                     onClick={() => onToggleExpand(null)}
                   >
-                    <IconCheck width={15} height={15} className="icon" />
+                    <IconCheck width={18} height={18} className="icon" />
                   </button>
                 </div>
               </div>
@@ -390,8 +397,14 @@ export default function TaskRow({
           // remove control ever shows for a given row at once.
           editOpen ? null : (
             <div className="task-row-actions">
+              {/* Bigger than the 14px default, matching the expanded card's
+                  own remove control above: reported directly against real
+                  Todoist's Text Scan reference. This branch only ever
+                  renders for an editable (Super Ramble preview) row, never
+                  the normal Add-sub-task/"..." pair below, so this stays
+                  scoped to the one context it was reported against. */}
               <button type="button" className="icon-btn" title="Remove" onClick={() => onRemove(task)}>
-                <IconX width={14} height={14} className="icon" />
+                <IconX width={17} height={17} className="icon" />
               </button>
             </div>
           )

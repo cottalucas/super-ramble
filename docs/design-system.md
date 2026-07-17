@@ -438,6 +438,59 @@ identical input:
   `onKey` handler, unchanged, still closes or cancels exactly as before).
   Do not add outside-click-to-close back to this modal without a new,
   equally explicit decision.
+- **A wider, taller modal, cards of their own instead of flush divider
+  rows, and a confirm gate on Discard**, reported directly against a real
+  Todoist Text Scan screenshot: the prior 640px/88vh sizing, flush hairline
+  rows, and instant one-click Discard read as a small, cramped surface for
+  a real, information-dense decision. `.modal.modal-super-ramble` is now
+  720px wide (matching `TaskDetail.jsx`'s own two-column width, an existing
+  precedent for "this app's one wider modal," not an arbitrary new number)
+  and taller (`calc(94vh - 16px)`, `.sr-preview-body`'s own scroll area
+  bumped from 60vh to 70vh to use the extra room); `.modal-super-ramble
+  .modal-footer` carries more padding, reading as a deliberate, substantial
+  bar rather than a cramped afterthought. Every preview row (`.sr-tree
+  .task-row`, both collapsed and the expanded `.task-edit-card`) now sits
+  on `--ds-sidebar-bg` (the same "a shade darker than canvas" token the
+  sidebar itself already uses in both themes) instead of flush against the
+  modal's own `--ds-canvas`, with more padding on every side so it reads as
+  centered and framed rather than edge-to-edge; scoped to `.sr-tree`
+  specifically, every other `.task-row` caller (Inbox, Today, Upcoming,
+  Project, Board, `TaskDetail.jsx`'s sub-tasks) is unchanged. The
+  remove/done icon pair, both collapsed (`.task-row-actions`) and expanded
+  (`.task-edit-footer-actions`), grew from 14-15px to 17-18px, scoped to
+  the two call sites only an editable (preview) row ever reaches, not a
+  change to `.icon-btn`'s own default sizing elsewhere. Discard now opens
+  the same `ConfirmDialog` pattern every other destructive action in this
+  app already uses (`TaskRow`'s own task delete, for one) instead of
+  discarding on a single click; Escape closes that dialog first, before
+  ever considering the expanded row or the whole modal, the same
+  closest-thing-first convention this modal's own `onKey` handler already
+  follows.
+- **The suggested project name gets a small edit-pencil affordance**
+  (`IconEdit`, `Icons.jsx`), beside the input it already always was
+  directly editable, reported against the same Todoist reference: clicking
+  it focuses the input, a discoverable trigger for an action that already
+  existed rather than a new one.
+- **The reasoning sentence explains what ties the tasks together, and
+  mentions a standalone task itself, so a separate note line is gone.**
+  `SYSTEM_PROMPT`/`STRUCTURE_SYSTEM_PROMPT_RULES` (both hand-synced copies)
+  loosened from "under 20 words, one plain sentence" to "under 40 words,
+  one or two plain sentences": reported as too terse to actually explain
+  the "why" (a shared goal, a dependency between steps), not just restate
+  the topic. The same rule now also asks the model to mention, in a short
+  added clause, when a task is marked `standalone`, so the user learns
+  before ever looking at the task list that something is headed to Inbox
+  separately. `.sr-standalone-note` ("N tasks stay loose, added to Inbox,"
+  this section's own prior bullet) is removed entirely, its class deleted
+  from `styles.css`: that information now lives in the reasoning sentence
+  itself, not a second, separate line restating it. The per-row "Loose,
+  going to Inbox" group and its Inbox icon (this section's earlier bullet)
+  are unchanged; this only removes the extra summary line above the tree.
+- **The loading state's copy says "inputs," not "dumps."** `{n}s elapsed,
+  complex or tangled inputs can take a minute or more.`, a plain wording
+  fix on the same line the fourth-round entry (`docs/resolution-log.md`)
+  already rewrote to state a shape rather than an unproven percentile;
+  that reasoning is unchanged, only the word choice.
 
 ## Responsive
 
