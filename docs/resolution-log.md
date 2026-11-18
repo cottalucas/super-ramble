@@ -3,6 +3,73 @@
 Append-only. Each entry is dated and records what was done and the decisions a
 future agent should not relitigate.
 
+## 2026-11-18: Due-diligence pass -- branches cleaned up, two dependency CVEs patched, VoiceRecorder handles a mid-recording mic dropout
+
+Ran a general due-diligence pass per user request: branch/PR hygiene, a
+security audit, a check for deprecated Claude model ids, and a review of
+`VoiceRecorder.jsx` for Bluetooth-mic (AirPods and similar) edge cases. Three
+findings led to changes; everything else audited came back clean (no secrets
+in tracked files or in git history, `node scripts/check-secrets.mjs` passing,
+auth enforced on every `/api` route via `verifyAuth`, Firestore rules scoped
+to `isOwner`, and both pinned model ids -- `claude-haiku-4-5-20251001` and
+`claude-sonnet-5` -- confirmed Active on Anthropic's model-deprecations page,
+not deprecated).
+
+**Branches:** `claude/suspicious-perlman-1eb4c2`,
+`fix/max-tokens-effort-and-input-caps`, `sidebar-header-caret-remove-gear`,
+and `text-scan-parity-five-parts` were all fully merged into `main` (verified
+with `git merge-base --is-ancestor`) with no open PRs referencing them.
+Deleted locally and on `origin`; `main` is now the only branch.
+
+**Dependency CVEs:** `npm audit` found a critical in `functions/`
+(`proxy-addr@2.0.7`, IP-spoofing via trust-proxy subnet matching,
+GHSA-jqcg-44mw-7w3h) and four `undici` advisories in the root app, both
+pulled in transitively (`firebase-functions`'s bundled Express, and
+`@firebase/auth`/`firestore`/`storage`'s Node fetch fallback respectively).
+Neither is reachable through `npm audit fix` without `--force` (a major
+`firebase`/`firebase-admin` bump), a bigger, riskier change than the fix
+warrants. Pinned the patched leaf versions instead via `overrides` in both
+`package.json` files: `proxy-addr: 2.0.8` (functions), `undici: 6.29.1`
+(root, same major as the resolved 6.19.7, API-compatible). Verified
+`npm run build` and loading `functions/index.js` both still succeed after
+`npm install`. Remaining vulnerabilities (10 moderate/5 high in functions'
+`firebase-admin` -> `@google-cloud/*` chain; 1 moderate/4 high in root's
+`@firebase/firestore` -> `@grpc/grpc-js` -> `protobufjs` chain) all require
+the same forced major bump and were left alone -- not relitigated here, but
+flagged as a real future task.
+
+**VoiceRecorder.jsx mic dropout:** The component had no
+`MediaRecorder.onerror` handler and no listener for a track's own `ended`
+event, so a mic disconnecting mid-recording (far more common with a
+Bluetooth source like AirPods than a built-in mic -- out of range, battery,
+or the OS handing the input route to another paired device) was invisible
+until the user manually stopped and got a generic "Didn't catch anything,"
+or silently produced a transcription attempt on truncated audio. Added
+`interruptedRef`, set by either `recorder.onerror` or a track's `onended`
+(via a shared `interruptAndStop(message)` helper that reuses the existing
+`stop()`), and read at the top of `handleStop` to skip the
+`/api/transcribe` call entirely and show a specific message instead ("Your
+microphone disconnected. Try again." / "Recording stopped unexpectedly. Try
+again."). Confirmed via the Media Capture spec and W3C bug 25248 that
+`track.stop()` (already called by `stop()`'s own cleanup) never fires
+`ended` itself, so there's no risk of the new listener firing from our own
+cleanup. Not relitigated: whether to add audio constraints
+(`echoCancellation`, etc.) or a live low-level warning for a quiet Bluetooth
+mic -- flagged as lower-priority, not implemented.
+
+### Decisions not to relitigate
+
+- Branch/PR cleanup for this repo means deleting branches already merged
+  into `main` by git's own ancestor check, not relying on GitHub's PR
+  "merged" label alone.
+- A dependency CVE that requires a major-version bump across
+  `firebase`/`firebase-admin` is a separate, deliberate task, not a
+  drive-by fix during a diligence pass -- pin the transitive leaf instead
+  when one exists.
+- A mic dropout mid-recording is a distinct failure mode from a failed
+  `getUserMedia()` call (already handled) and from an empty/short recording
+  (already handled); it gets its own message, not folded into either.
+
 ## 2026-07-17 (seventh round): Two doc coherence bugs fixed, found during a pre external-review documentation audit, not a live bug report
 
 Read the full `docs/` set per `docs/orchestration.md`'s loop ahead of an

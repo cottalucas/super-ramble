@@ -10,5 +10,8 @@
     "@anthropic-ai/sdk": "^0.110.0",
     "firebase-admin": "^12.3.0",
     "firebase-functions": "^5.0.1"
+  },
+  "overrides": {
+    "proxy-addr": "2.0.8"
   }
 }
