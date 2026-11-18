@@ -82,6 +82,14 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
   const secondsRef = useRef(0);
   const onActiveChangeRef = useRef(onActiveChange);
   onActiveChangeRef.current = onActiveChange;
+  // Set by the recorder's own onerror, or by a track's onended (the mic
+  // disappearing mid-recording: AirPods and other Bluetooth mics drop out
+  // far more often than a built-in mic does -- out of range, battery, or
+  // the OS handing the input route to another paired device). handleStop
+  // reads this instead of attempting to transcribe whatever partial/garbage
+  // audio was captured, so a dropout surfaces as a clear, specific message
+  // instead of a generic "didn't catch anything" or a wasted API call.
+  const interruptedRef = useRef(null);
 
   useEffect(() => {
     const ok =
@@ -129,12 +137,25 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
     rafRef.current = requestAnimationFrame(tickLevel);
   }
 
+  // The mic dropping out mid-recording (disconnect) or the recorder hitting
+  // a runtime error both end the session the same way: stop cleanly and
+  // leave a message behind for handleStop to show instead of transcribing.
+  function interruptAndStop(message) {
+    if (!recorderRef.current) return;
+    interruptedRef.current = message;
+    stop();
+  }
+
   async function start() {
     if (disabled || recording || transcribing) return;
     setMessage(null);
+    interruptedRef.current = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+      stream.getAudioTracks().forEach((track) => {
+        track.onended = () => interruptAndStop('Your microphone disconnected. Try again.');
+      });
 
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       const audioCtx = new AudioContextClass();
@@ -153,6 +174,7 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
       recorder.onstop = handleStop;
+      recorder.onerror = () => interruptAndStop('Recording stopped unexpectedly. Try again.');
       recorderRef.current = recorder;
       recorder.start();
 
@@ -198,6 +220,14 @@ export default function VoiceRecorder({ variant = 'compact', onActiveChange, onT
 
   async function handleStop() {
     try {
+      const interrupted = interruptedRef.current;
+      interruptedRef.current = null;
+      if (interrupted) {
+        chunksRef.current = [];
+        setMessage(interrupted);
+        return;
+      }
+
       const durationSeconds = secondsRef.current;
       const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'audio/webm' });
       chunksRef.current = [];
